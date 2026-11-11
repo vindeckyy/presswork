@@ -101,6 +101,9 @@ pub mod op {
     pub const SHUTDOWN_ALL_PRINTERS: u16 = 0x0063;
     pub const STARTUP_ALL_PRINTERS: u16 = 0x0064;
 
+    /// `IPP_ANY_OPERATION` — `<Limit All>` in `<Policy>` (0xffffffff).
+    pub const ANY_OPERATION: u32 = 0xffff_ffff;
+
     /// CUPS private operations start at `0x4000`.
     pub const PRIVATE: u16 = 0x4000;
     pub const CUPS_GET_DEFAULT: u16 = 0x4001;
@@ -115,9 +118,9 @@ pub mod op {
     pub const CUPS_SET_DEFAULT: u16 = 0x400a;
     pub const CUPS_GET_DEVICES: u16 = 0x400b;
     pub const CUPS_GET_PPDS: u16 = 0x400c;
-    pub const CUPS_MOVE_JOB: u16 = 0x4023;
-    pub const CUPS_AUTHENTICATE_JOB: u16 = 0x4024;
-    pub const CUPS_GET_PPD: u16 = 0x4025;
+    pub const CUPS_MOVE_JOB: u16 = 0x400d;
+    pub const CUPS_AUTHENTICATE_JOB: u16 = 0x400e;
+    pub const CUPS_GET_PPD: u16 = 0x400f;
     pub const CUPS_GET_DOCUMENT: u16 = 0x4027;
     pub const CUPS_CREATE_LOCAL_PRINTER: u16 = 0x4028;
 
@@ -152,11 +155,11 @@ pub mod op {
             RENEW_SUBSCRIPTION => "Renew-Subscription",
             CANCEL_SUBSCRIPTION => "Cancel-Subscription",
             GET_NOTIFICATIONS => "Get-Notifications",
-            SEND_NOTIFICATIONS => "Send-Notifications",
+            SEND_NOTIFICATIONS => "(Send-Notifications)",
             GET_RESOURCE_ATTRIBUTES => "Get-Resource-Attributes",
-            GET_RESOURCE_DATA => "Get-Resource-Data",
+            GET_RESOURCE_DATA => "(Get-Resource-Data)",
             GET_RESOURCES => "Get-Resources",
-            GET_PRINT_SUPPORT_FILES => "Get-Printer-Support-Files",
+            GET_PRINT_SUPPORT_FILES => "(Get-Printer-Support-Files)",
             ENABLE_PRINTER => "Enable-Printer",
             DISABLE_PRINTER => "Disable-Printer",
             PAUSE_PRINTER_AFTER_CURRENT_JOB => "Pause-Printer-After-Current-Job",
@@ -242,6 +245,142 @@ pub mod op {
             CUPS_CREATE_LOCAL_PRINTER => "CUPS-Create-Local-Printer",
             _ => "(unknown-op)",
         }
+    }
+
+    /// Operation id for a name — mirrors `ippOpValue()`
+    /// (case-insensitive; `0x…` hex and `windows-ext` accepted;
+    /// `Create-Job-Subscription` legacy alias).
+    #[must_use]
+    pub fn value(name: &str) -> Option<u16> {
+        if let Some(hex) = name.strip_prefix("0x") {
+            return u16::from_str_radix(hex, 16).ok();
+        }
+        // Linear scan over every named op (same tables `name()` uses).
+        const TABLE: &[(u16, &str)] = &[
+            (PRINT_JOB, "Print-Job"),
+            (PRINT_URI, "Print-URI"),
+            (VALIDATE_JOB, "Validate-Job"),
+            (CREATE_JOB, "Create-Job"),
+            (SEND_DOCUMENT, "Send-Document"),
+            (SEND_URI, "Send-URI"),
+            (CANCEL_JOB, "Cancel-Job"),
+            (GET_JOB_ATTRIBUTES, "Get-Job-Attributes"),
+            (GET_JOBS, "Get-Jobs"),
+            (GET_PRINTER_ATTRIBUTES, "Get-Printer-Attributes"),
+            (HOLD_JOB, "Hold-Job"),
+            (RELEASE_JOB, "Release-Job"),
+            (RESTART_JOB, "Restart-Job"),
+            (PAUSE_PRINTER, "Pause-Printer"),
+            (RESUME_PRINTER, "Resume-Printer"),
+            (PURGE_JOBS, "Purge-Jobs"),
+            (SET_PRINTER_ATTRIBUTES, "Set-Printer-Attributes"),
+            (SET_JOB_ATTRIBUTES, "Set-Job-Attributes"),
+            (GET_PRINTER_SUPPORTED_VALUES, "Get-Printer-Supported-Values"),
+            (CREATE_PRINTER_SUBSCRIPTIONS, "Create-Printer-Subscriptions"),
+            (CREATE_JOB_SUBSCRIPTIONS, "Create-Job-Subscriptions"),
+            (GET_SUBSCRIPTION_ATTRIBUTES, "Get-Subscription-Attributes"),
+            (GET_SUBSCRIPTIONS, "Get-Subscriptions"),
+            (RENEW_SUBSCRIPTION, "Renew-Subscription"),
+            (CANCEL_SUBSCRIPTION, "Cancel-Subscription"),
+            (GET_NOTIFICATIONS, "Get-Notifications"),
+            (GET_RESOURCE_ATTRIBUTES, "Get-Resource-Attributes"),
+            (GET_RESOURCES, "Get-Resources"),
+            (ENABLE_PRINTER, "Enable-Printer"),
+            (DISABLE_PRINTER, "Disable-Printer"),
+            (PAUSE_PRINTER_AFTER_CURRENT_JOB, "Pause-Printer-After-Current-Job"),
+            (HOLD_NEW_JOBS, "Hold-New-Jobs"),
+            (RELEASE_HELD_NEW_JOBS, "Release-Held-New-Jobs"),
+            (DEACTIVATE_PRINTER, "Deactivate-Printer"),
+            (ACTIVATE_PRINTER, "Activate-Printer"),
+            (RESTART_PRINTER, "Restart-Printer"),
+            (SHUTDOWN_PRINTER, "Shutdown-Printer"),
+            (STARTUP_PRINTER, "Startup-Printer"),
+            (REPROCESS_JOB, "Reprocess-Job"),
+            (CANCEL_CURRENT_JOB, "Cancel-Current-Job"),
+            (SUSPEND_CURRENT_JOB, "Suspend-Current-Job"),
+            (RESUME_JOB, "Resume-Job"),
+            (PROMOTE_JOB, "Promote-Job"),
+            (SCHEDULE_JOB_AFTER, "Schedule-Job-After"),
+            (CANCEL_DOCUMENT, "Cancel-Document"),
+            (GET_DOCUMENT_ATTRIBUTES, "Get-Document-Attributes"),
+            (GET_DOCUMENTS, "Get-Documents"),
+            (DELETE_DOCUMENT, "Delete-Document"),
+            (SET_DOCUMENT_ATTRIBUTES, "Set-Document-Attributes"),
+            (CANCEL_JOBS, "Cancel-Jobs"),
+            (CANCEL_MY_JOBS, "Cancel-My-Jobs"),
+            (RESUBMIT_JOB, "Resubmit-Job"),
+            (CLOSE_JOB, "Close-Job"),
+            (IDENTIFY_PRINTER, "Identify-Printer"),
+            (VALIDATE_DOCUMENT, "Validate-Document"),
+            (ADD_DOCUMENT_IMAGES, "Add-Document-Images"),
+            (ACKNOWLEDGE_DOCUMENT, "Acknowledge-Document"),
+            (ACKNOWLEDGE_IDENTIFY_PRINTER, "Acknowledge-Identify-Printer"),
+            (ACKNOWLEDGE_JOB, "Acknowledge-Job"),
+            (FETCH_DOCUMENT, "Fetch-Document"),
+            (FETCH_JOB, "Fetch-Job"),
+            (GET_OUTPUT_DEVICE_ATTRIBUTES, "Get-Output-Device-Attributes"),
+            (UPDATE_ACTIVE_JOBS, "Update-Active-Jobs"),
+            (DEREGISTER_OUTPUT_DEVICE, "Deregister-Output-Device"),
+            (UPDATE_DOCUMENT_STATUS, "Update-Document-Status"),
+            (UPDATE_JOB_STATUS, "Update-Job-Status"),
+            (UPDATE_OUTPUT_DEVICE_ATTRIBUTES, "Update-Output-Device-Attributes"),
+            (GET_NEXT_DOCUMENT_DATA, "Get-Next-Document-Data"),
+            (ALLOCATE_PRINTER_RESOURCES, "Allocate-Printer-Resources"),
+            (CREATE_PRINTER, "Create-Printer"),
+            (DEALLOCATE_PRINTER_RESOURCES, "Deallocate-Printer-Resources"),
+            (DELETE_PRINTER, "Delete-Printer"),
+            (GET_PRINTERS, "Get-Printers"),
+            (SHUTDOWN_ONE_PRINTER, "Shutdown-One-Printer"),
+            (STARTUP_ONE_PRINTER, "Startup-One-Printer"),
+            (CANCEL_RESOURCE, "Cancel-Resource"),
+            (CREATE_RESOURCE, "Create-Resource"),
+            (INSTALL_RESOURCE, "Install-Resource"),
+            (SEND_RESOURCE_DATA, "Send-Resource-Data"),
+            (SET_RESOURCE_ATTRIBUTES, "Set-Resource-Attributes"),
+            (CREATE_RESOURCE_SUBSCRIPTIONS, "Create-Resource-Subscriptions"),
+            (CREATE_SYSTEM_SUBSCRIPTIONS, "Create-System-Subscriptions"),
+            (DISABLE_ALL_PRINTERS, "Disable-All-Printers"),
+            (ENABLE_ALL_PRINTERS, "Enable-All-Printers"),
+            (GET_SYSTEM_ATTRIBUTES, "Get-System-Attributes"),
+            (GET_SYSTEM_SUPPORTED_VALUES, "Get-System-Supported-Values"),
+            (PAUSE_ALL_PRINTERS, "Pause-All-Printers"),
+            (PAUSE_ALL_PRINTERS_AFTER_CURRENT_JOB, "Pause-All-Printers-After-Current-Job"),
+            (REGISTER_OUTPUT_DEVICE, "Register-Output-Device"),
+            (RESTART_SYSTEM, "Restart-System"),
+            (RESUME_ALL_PRINTERS, "Resume-All-Printers"),
+            (SET_SYSTEM_ATTRIBUTES, "Set-System-Attributes"),
+            (SHUTDOWN_ALL_PRINTERS, "Shutdown-All-Printers"),
+            (STARTUP_ALL_PRINTERS, "Startup-All-Printers"),
+            (CUPS_GET_DEFAULT, "CUPS-Get-Default"),
+            (CUPS_GET_PRINTERS, "CUPS-Get-Printers"),
+            (CUPS_ADD_MODIFY_PRINTER, "CUPS-Add-Modify-Printer"),
+            (CUPS_DELETE_PRINTER, "CUPS-Delete-Printer"),
+            (CUPS_GET_CLASSES, "CUPS-Get-Classes"),
+            (CUPS_ADD_MODIFY_CLASS, "CUPS-Add-Modify-Class"),
+            (CUPS_DELETE_CLASS, "CUPS-Delete-Class"),
+            (CUPS_ACCEPT_JOBS, "CUPS-Accept-Jobs"),
+            (CUPS_REJECT_JOBS, "CUPS-Reject-Jobs"),
+            (CUPS_SET_DEFAULT, "CUPS-Set-Default"),
+            (CUPS_GET_DEVICES, "CUPS-Get-Devices"),
+            (CUPS_GET_PPDS, "CUPS-Get-PPDs"),
+            (CUPS_MOVE_JOB, "CUPS-Move-Job"),
+            (CUPS_AUTHENTICATE_JOB, "CUPS-Authenticate-Job"),
+            (CUPS_GET_PPD, "CUPS-Get-PPD"),
+            (CUPS_GET_DOCUMENT, "CUPS-Get-Document"),
+            (CUPS_CREATE_LOCAL_PRINTER, "CUPS-Create-Local-Printer"),
+        ];
+        for (op, n) in TABLE {
+            if n.eq_ignore_ascii_case(name) {
+                return Some(*op);
+            }
+        }
+        if name.eq_ignore_ascii_case("windows-ext") {
+            return Some(PRIVATE);
+        }
+        if name.eq_ignore_ascii_case("Create-Job-Subscription") {
+            return Some(CREATE_JOB_SUBSCRIPTIONS);
+        }
+        None
     }
 }
 

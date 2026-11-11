@@ -9,3 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+ipp-codec = { path = "../ipp-codec" }
+sys = { path = "../sys" }

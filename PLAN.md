@@ -264,7 +264,7 @@ CUPS/                             # workspace root (this repo)
 6. **Repo → one cargo workspace** producing binaries with CUPS names: `cupsd`, `cups-lpd`, `cups-deviced`, `cupsfilter`, `cups-exec`, and `backend/{socket,ipp,ipps,lpd,snmp,usb,dnssd,serial,parallel}` (`ipps`/`ippusb` fold into the `ipp` binary like upstream).
 7. **Runtime → tokio multi-thread**; queue/job mutations serialized through a scheduler domain so ordering matches cupsd's single-writer semantics while I/O (TLS, CGI, DNS-SD, process pipes) runs parallel.
 8. **License → Apache-2.0 OR MIT.**
-9. **Project name** → codename chosen at P0 from §9.1 candidates (verify crates.io/GitHub/org availability); binaries keep the CUPS filenames (`cupsd`, `cups-lpd`, `backend/*`) regardless — drop-in is the product.
+9. **Project name → `presswork`** (crates.io-verified free at P0); binaries keep the CUPS filenames (`cupsd`, `cups-lpd`, `backend/*`) regardless — drop-in is the product.
 
 ---
 
@@ -276,7 +276,7 @@ The bar for replacing `cupsd` is unusually high: printing is critical-path on ev
 
 - **What we say:** "a memory-safe, drop-in replacement for the CUPS 2.x scheduler." Same socket, same config files, same CLI flags, same web CGIs — swap the binary, keep the system.
 - **What we never claim:** an official-sounding "CUPS" name (CUPS is OpenPrinting's trademark — binaries keep the `cupsd` filenames for drop-in compatibility, but the *project* is branded independently), and never "competitor to OpenPrinting." Upstream is itself rewriting for 3.x and abandoning the 2.x shape; we are the **memory-safe 2.x lineage** for the decade-long tail of deployments 3.x leaves behind. Complementary, not hostile — and we offer artifacts back (`ipp-codec` serves the Rust printer-app ecosystem OpenPrinting encourages).
-- **Name:** choose at P0; candidates to verify for crates.io/GitHub/org availability: `halftone`, `presswork`, `forme`, `frisket` (`platen` is taken). Tagline: "a memory-safe, CUPS-compatible print spooler."
+- **Name: `presswork`** (decided at P0 — crates.io verified free; `platen`, `halftone`, `forme`, `frisket`, `quoin`, `presse`, `offset` all taken). Presswork = the operation/output of a printing press. Tagline: "a memory-safe, CUPS-compatible print spooler." Binaries keep `cupsd`/`cups-lpd`/`backend/*` filenames — drop-in is the product.
 
 ### 9.2 The switch case (why anyone takes the risk)
 
