@@ -1,0 +1,62 @@
+# Rust rewrite of the CUPS printing stack.
+#
+# Produces drop-in replacements for cupsd and its companion daemons:
+#   cupsd, cups-lpd, cups-deviced, cupsfilter, cups-exec,
+#   backend/{socket,ipp,lpd,snmp,usb,dnssd,serial,parallel}
+#
+# See PLAN.md for architecture, contract surfaces, and milestones.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/ipp-codec",
+    "crates/httpd",
+    "crates/cups-config",
+    "crates/mime-db",
+    "crates/authz",
+    "crates/authn",
+    "crates/job",
+    "crates/printer",
+    "crates/pipeline",
+    "crates/ops",
+    "crates/events",
+    "crates/dnssd",
+    "crates/cups-tls",
+    "crates/cups-dbus",
+    "crates/cups-log",
+    "crates/backend-common",
+    "crates/sys",
+    "bins/cupsd",
+    "bins/cups-lpd",
+    "bins/cups-deviced",
+    "bins/cupsfilter",
+    "bins/cups-exec",
+    "bins/backends/socket",
+    "bins/backends/ipp",
+    "bins/backends/lpd",
+    "bins/backends/snmp",
+    "bins/backends/usb",
+    "bins/backends/dnssd",
+    "bins/backends/serial",
+    "bins/backends/parallel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0 OR MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"

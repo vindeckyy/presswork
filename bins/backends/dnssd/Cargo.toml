@@ -1,0 +1,15 @@
+[package]
+name = "cups-backend-dnssd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dnssd"
+path = "src/main.rs"
+
+[dependencies]
