@@ -20,6 +20,8 @@ Build a drop-in, memory-safe replacement for `cupsd` and its companion daemons �
 
 **Strategic context (important):** OpenPrinting's own CUPS 3.x splits the world into `cups-local` (per-user, temp queues) + `cups-sharing` (root, permanent queues), drops PPDs/drivers/raw queues/Kerberos. We are **not** copying that — we target **CUPS 2.x drop-in semantics** because that's what every distro, print dialog, and admin tool speaks today, while designing so the 3.x trajectory (driverless-first) is the fast path. PPD support is scoped as a later, separable layer.
 
+**Adoption is a first-class requirement, not marketing.** A `cupsd` replacement is installed by distros, not downloaded by users — so conformance evidence, packaging, security posture, and governance are designed into the phases. See §9.
+
 **Key architectural choices:**
 - **Keep the out-of-process filter/backend contract.** Filters (`pdftopdf`, `pdftoraster`, `foomatic-rip`…) and third-party backends (`beh`, `smbspool`, `hp`, `bjnp`) are external binaries with a stable argv/env/pipe/exit-code contract. We reimplement the *orchestrator*, not Ghostscript. We ship Rust rewrites of the *stock backends* (socket/ipp/ipps/lpd/snmp/usb/dnssd) as separate binaries speaking that contract.
 - **tokio** for the event loop (replaces cupsd's single-threaded `select()` + `process_children` + timer-scanning), with jobs/queues as owned state behind locks — not async-infected data structures.
@@ -156,10 +158,11 @@ CUPS/                             # workspace root (this repo)
 
 ## 5. Implementation phases (milestones)
 
-> Each phase ends *runnable*, verified against `ipptool` + real clients.
+> Each phase ends *runnable*, verified against `ipptool` + real clients, and **publishes its conformance score** (§9.4). The differential runner vs C cupsd starts at P1 and gates every later phase.
 
 ### P0 — Skeleton & codec (foundation)
 - Workspace, CI (clippy/fmt/audit/miri-lite, linux+macOS builds), license, tracing/log.
+- Repo hygiene from day one (§9.4): project name + org decision, README, CONTRIBUTING, SECURITY.md, CHANGELOG, code of conduct; `cargo-fuzz` scaffold + CI fuzz job seeded with the upstream `test/` corpus.
 - `ipp-codec`: full wire read/write + model; round-trip fuzz vs libcups `ipp` decode of corpus (use CUPS `test/*.test` files + captured traffic); `#[no_std]`-ish core for reuse in backends.
 - `httpd`: hyper-util HTTP/1.1 server w/ virtual-host check, chunked req bodies, Expect:100, keep-alive, CGI/static GET scaffold, TLS acceptor + **RFC 2817 upgrade** (reuse ippper pattern: peek first bytes → TLS or HTTP; on `OPTIONS *`+`Upgrade`→switch).
 - `cups-config`: cupsd.conf/cups-files.conf parsers → typed `Config` incl. Location/Limit/Policy, all ~100 directives w/ defaults matching `conf.c`; `-t` config-test.
@@ -170,7 +173,7 @@ CUPS/                             # workspace root (this repo)
 - Handlers: Get-Printer-Attributes, CUPS-Get-Printers/-Classes/-Default, Get-Jobs, Get-Job-Attributes, Get-Printer-Supported-Values, Validate-Job (attr-level), CUPS-Get-Document (spool read), Get-Notifications (empty).
 - `printer` registry + `printers.conf`/`classes.conf` **load/save** (incl. `<DefaultPrinter>`, quotas, `State`, `Type`, `Attribute` blobs); synthesize `printer/<name>` mime types + `document-format-supported` etc.
 - `log` writers (error/access formats byte-compat).
-- **Gate:** `ipptool ipp://localhost/printers/q test/4.1-requests.test` passes for covered ops; `lpstat -p -l`, GNOME/KDE dialogs enumerate.
+- **Gate:** `ipptool ipp://localhost/printers/q test/4.1-requests.test` passes for covered ops; `lpstat -p -l`, GNOME/KDE dialogs enumerate; differential-runner v0 diffs normalized responses vs C cupsd for every implemented op (runs in CI from here on).
 
 ### P2 — Jobs & the pipeline (the spooler)
 - `job`: c/d spool files, Create-Job+Send-Document, Print-Job (+Print-URI fetch), multi-doc, job-id alloc/`NextJobId`, `job.cache`, `PreserveJobHistory/Files`, state transitions + `time-at-*`, `job-*-attrs` sets, Cancel/Close/Restart/Hold/Release, `job-sheets` banners, quotas hooks.
@@ -217,7 +220,7 @@ CUPS/                             # workspace root (this repo)
 - Differential test rig: same `ipptool`/CLI sequence vs C cupsd and cupsd-rs, diff normalized responses (status, attr sets incl. `-default`/`-supported` triplets, error strings).
 - Interop matrix: macOS/iOS, Windows IPP client, GNOME/KDE, `cups-browsed`, `ippeveprinter`, `smb` print path.
 - Security review: root daemon — minimize `unsafe`, isolate `sys` crate, default `Encryption Required` on non-localhost listeners? (compat: keep `IfRequested`), AppArmor/SELinux profiles, `systemd` sandbox knobs (ProtectSystem…), CVE-hardening notes vs C cupsd (e.g. the 2024 `cups-browsed`/foomatic chain — document how Rust model avoids injection classes: strict argv, no string-sprintf envs into shell).
-- Packaging: `cargo install`, deb/rpm Arch examples, file perm map (0700 ssl, 0755 backends…), `ConfigFilePerm/LogFilePerm` enforcement, PAM file `/etc/pam.d/cups`, docs/man parity for directives.
+- Packaging per §9.5: `cargo install`, reference deb/rpm/PKGBUILD/APK/nixpkgs/port, file perm map (0700 ssl, 0755 backends…), `ConfigFilePerm/LogFilePerm` enforcement, PAM file `/etc/pam.d/cups`, the full man-page set, vendored source tarball + SBOM.
 - Release gates: full `test/*.test` green + `run-stp-tests.sh`, real-printer matrix, mem-leak/perf smoke vs cupsd, `cargo audit` clean, MSRV pin.
 
 ---
@@ -261,10 +264,68 @@ CUPS/                             # workspace root (this repo)
 6. **Repo → one cargo workspace** producing binaries with CUPS names: `cupsd`, `cups-lpd`, `cups-deviced`, `cupsfilter`, `cups-exec`, and `backend/{socket,ipp,ipps,lpd,snmp,usb,dnssd,serial,parallel}` (`ipps`/`ippusb` fold into the `ipp` binary like upstream).
 7. **Runtime → tokio multi-thread**; queue/job mutations serialized through a scheduler domain so ordering matches cupsd's single-writer semantics while I/O (TLS, CGI, DNS-SD, process pipes) runs parallel.
 8. **License → Apache-2.0 OR MIT.**
+9. **Project name** → codename chosen at P0 from §9.1 candidates (verify crates.io/GitHub/org availability); binaries keep the CUPS filenames (`cupsd`, `cups-lpd`, `backend/*`) regardless — drop-in is the product.
 
 ---
 
-## 9. Research appendix (what I verified in source)
+## 9. Adoption & go-to-market (earning the install)
+
+The bar for replacing `cupsd` is unusually high: printing is critical-path on every Linux desktop, distros are conservative about it, and "a rewrite" earns skepticism until conformance is *demonstrated*. This section is treated as a first-class engineering requirement — adoption machinery is built into the phases above, not bolted on at release.
+
+### 9.1 Positioning & name
+
+- **What we say:** "a memory-safe, drop-in replacement for the CUPS 2.x scheduler." Same socket, same config files, same CLI flags, same web CGIs — swap the binary, keep the system.
+- **What we never claim:** an official-sounding "CUPS" name (CUPS is OpenPrinting's trademark — binaries keep the `cupsd` filenames for drop-in compatibility, but the *project* is branded independently), and never "competitor to OpenPrinting." Upstream is itself rewriting for 3.x and abandoning the 2.x shape; we are the **memory-safe 2.x lineage** for the decade-long tail of deployments 3.x leaves behind. Complementary, not hostile — and we offer artifacts back (`ipp-codec` serves the Rust printer-app ecosystem OpenPrinting encourages).
+- **Name:** choose at P0; candidates to verify for crates.io/GitHub/org availability: `halftone`, `presswork`, `forme`, `frisket` (`platen` is taken). Tagline: "a memory-safe, CUPS-compatible print spooler."
+
+### 9.2 The switch case (why anyone takes the risk)
+
+1. **Security — the headline.** The Sept 2024 disclosure chain (CVE-2024-47176, -47076, -47175, -47177; CVSS 9.9) gave the C printing stack remote unauthenticated RCE: attacker-controlled IPP attributes flowed unsanitized into a generated PPD and then into a `foomatic-rip` command line. Every stage of that *class* is structurally prevented here: a strictly-typed fuzzed wire codec (`#![forbid(unsafe_code)]`), argv built as `Vec<OsString>` with no format-string env/exec construction, and typed config synthesis with output escaping where libppd had none. `cupsd` itself carries CVE history in IPP/PPD parsing and authz — the exposed surface is exactly what is being rewritten.
+2. **Sandboxing upstream can't do.** Every filter/backend runs under Landlock + seccomp-bpf by default on Linux — per-job filesystem/syscall policy the C scheduler cannot express — on top of privdrop/rlimits. Zero compatibility cost (internal-only), large post-exploit blast-radius reduction.
+3. **Footprint & deps.** Static musl build option removes the libcups/cups-filters/Avahi/OpenSSL runtime chain — the OpenWrt/Yocto/NAS/Alpine lever. Targets: single-digit MB idle RSS, sub-second `cupsd -t`, socket-activated on-demand parity.
+4. **Ops ergonomics (opt-in, compat by default).** `--check-config` migration linter reporting supported/ignored/unknown per directive *before* a switch; optional structured logs + metrics endpoint alongside byte-compat `error_log`/`access_log`.
+
+### 9.3 Adoption channels, in expected order
+
+| Channel | Gate | Lever |
+|---|---|---|
+| crates.io ecosystem | P0–P1 | Publish `ipp-codec` early — no server-grade Rust IPP codec exists; printer-app/proxy/test-tool authors adopt it, reputation and contributors funnel back |
+| Docker / NAS / embedded | P3 (prints real hardware) | Distroless OCI image + compose demo; static musl binary; self-serve audience that tolerates early-stage |
+| Enthusiast distros | P4 (admin ops) | We write the reference packaging: AUR/PKGBUILD, nixpkgs, APK, ebuild — first "it installs" moments |
+| Mainline distros as *alternative* package | P6–P7 | Vendored deps, MSRV stable-N-2, full man pages, systemd units, conformance report in release notes; approach debian-printing and Fedora printing teams with the dashboard, not a pitch |
+| Distro *default* consideration | post-1.0, multi-year | Only after outsiders run it in anger; provide the side-by-side A/B path (§9.5) so a distro can ship both and flip via alternatives/systemd preset |
+| OpenPrinting ecosystem | continuous | printing-architecture list early; OpenPrinting Summit / PWG F2F talks at P2 and P5; cups-filters interop framed as a feature ("same filter binaries, safer orchestrator") |
+
+### 9.4 Trust machinery (built into phases, published per release)
+
+- **Conformance dashboard:** % of upstream `test/4.x` + `test/5.x` passing plus a per-op matrix, regenerated per commit — the single most important adoption artifact. Differential runner vs C cupsd starts at P1 (not P8) so semantic gaps surface while handlers are fresh.
+- **Compatibility matrix:** clients (GNOME/KDE dialogs, macOS, iOS AirPrint, Windows IPP class driver, Chromium, LibreOffice), tools (`lp*`/`lpstat`/`lpadmin`/`system-config-printer`/`cupsctl`, cups-browsed pickup, sane-airscan), printer classes (IPP Everywhere, AirPrint, JetDirect, USB, LPD). Community-editable markdown in-repo.
+- **Fuzzing as the security receipt:** cargo-fuzz targets on every parser (IPP, HTTP, config, mime magic, PPD, LPD) in CI; corpus seeded from upstream `test/`; crashes block releases. This is the concrete "that bug class is gone" evidence.
+- **Supply chain:** `cargo audit` + `cargo deny` in CI, SBOM via `cargo-cyclonedx`, vendored source tarball per release for offline distro builds, signed tags, MSRV pinned stable-N-2.
+- **Governance:** org repo (not personal), CONTRIBUTING/SECURITY/CODE_OF_CONDUCT/CHANGELOG from P0, documented release process, `good first issue` farming — each backend and each directive group is an ideal isolated contribution; independently reviewable crates keep the bus factor honest.
+- **Honest deviations doc:** `docs/deviations.md` lists every deliberate non-match (dropped legacy knobs, tightened defaults) with rationale; `--check-config` reports against it. Undocumented drift is what corrodes distro trust.
+
+### 9.5 Packaging & install (starts P4, hardens P8)
+
+- `Makefile` install target honoring FHS + the full perm map (`0700 ssl`, `0755 backends`, `lp` ownership); `cargo install --root` verified.
+- Reference packages maintained in-repo under `packaging/`: debian, rpm, arch, alpine, nix, freebsd — CI-built so distro maintainers fork rather than start from zero.
+- Man pages, full coverage: `cupsd(8)`, `cupsd.conf(5)`, `cups-files.conf(5)`, `printers.conf(5)`, `classes.conf(5)`, `subscriptions.conf(5)`, `mime.types(5)`, `mime.convs(5)`, `cups-lpd(8)`, `cupsfilter(8)`, `backend(7)`, `filter(7)`, `snmp.conf(5)` — required for Debian-grade review.
+- OCI image (distroless: daemon + backends + CA certs) + `compose` demo; Homebrew formula at macOS tier-2.
+- **Zero-risk migration path:** install alongside C cupsd on an alternate port (`Listen 127.0.0.1:8631`), A/B via `CUPS_SERVER=127.0.0.1:8631 ipptool …` without touching the live spooler, then swap units (`systemctl disable cups && systemctl enable <ours>`) — same socket path, same `/etc/cups` read in place.
+
+### 9.6 Announce / demo moments (each phase has a story)
+
+P0 "fuzzed IPP codec on crates.io" · P1 "ipptool conformance X% — published matrix" · P2 **"it prints"** — real-hardware video; the headline moment · P3 "discovers every printer on the LAN incl. USB" · P5 "iPhone sees it" (AirPrint TXT) + stock web UI working · P7 "full upstream suite green" = **1.0** · P8 "benchmarks + hardening docs" (idle RSS, spool throughput, `-t` latency vs C cupsd).
+
+### 9.7 Success metrics (honest, ordered)
+
+- **Leading:** conformance %, external merged PRs, `ipp-codec` dependents on crates.io, packaged-in count (AUR/nix/Alpine), image pulls, audit-clean streak.
+- **Lagging:** an official Debian/Fedora package, a NAS/router embedder, a distro-default discussion.
+- **Expectation setting:** multi-year credibility arc — nobody makes a v1.0 print daemon a default on vibes. The plan optimizes for being *boring and provable*.
+
+---
+
+## 10. Research appendix (what I verified in source)
 
 - `ipp.c` op table: all 50 ops enumerated (above); handlers `add_printer`/`print_job`/`create_subscriptions`/… mirror the dispatch.
 - `job.c::start_job` + `cupsdContinueJob`: argv/env construction, `mimeFilter2` call, `gziptoany`/prefilter/port-monitor insertion, `FilterLimit`, remote vs local, `current_file` multi-doc loop, `single_file` PPD quirk.
