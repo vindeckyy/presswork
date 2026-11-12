@@ -19,6 +19,7 @@ PIDFILE="$PWROOT/run/cupsd.pid"
 
 bootstrap() {
     cargo build --workspace
+    stop  # free the port + read the pidfile before it is deleted
     rm -rf "$PWROOT"
     mkdir -p "$PWROOT"/{etc,spool,run,cache,logs,out,docroot,tmp,mime,bin/{daemon,backend,filter,notifier},drv,ppd}
     cp target/debug/cupsd "$PWROOT/cupsd"
@@ -136,6 +137,23 @@ run() {
         ipp-1.1 ipp-2.0 ipp-2.1 ipp-2.2 ipp-everywhere
     )
     printf 'x' > /tmp/pw-conf-doc.txt
+    # Seed one pending job so `cancel-current-job`'s `Get-Jobs` always has a
+    # `not-completed` job to find — a `Create-Job` with no `Send-Document`
+    # stays `pending-held`/`job-data-insufficient` (the file backend would
+    # otherwise complete every job before the query).
+    cat > /tmp/pw-conf-pending.test <<'EOF'
+{
+    NAME "seed pending job"
+    OPERATION Create-Job
+    GROUP operation-attributes-tag
+    ATTR charset attributes-charset utf-8
+    ATTR language attributes-natural-language en
+    ATTR uri printer-uri $uri
+    ATTR name requesting-user-name $user
+    STATUS successful-ok
+}
+EOF
+    ipptool -tv -f /tmp/pw-conf-doc.txt "$uri" /tmp/pw-conf-pending.test >/dev/null 2>&1 || true
     for t in "${tests[@]}"; do
         [ -f "$IPPTESTS/$t.test" ] || { echo "SKIP $t"; skip=$((skip+1)); continue; }
         local out
@@ -144,9 +162,12 @@ run() {
             -d make=Generic -d product=Generic -d model=Generic \
             -d language=en -d psversion=3010.00 \
             "$uri" "$IPPTESTS/$t.test" 2>&1 || true)
-        if echo "$out" | grep -qE '\[FAIL\]'; then
+        # Herestring (not `echo | grep -q`): under `pipefail`, `grep -q` exits
+        # on first match while `echo` still writes → SIGPIPE → 141 → a large
+        # suite's output would falsely read "no verdict".
+        if grep -qE '\[FAIL\]' <<<"$out"; then
             echo "FAIL $t"; fail=$((fail+1))
-        elif echo "$out" | grep -qE '\[PASS\]'; then
+        elif grep -qE '\[PASS\]' <<<"$out"; then
             echo "PASS $t"; pass=$((pass+1))
         else
             echo "---- $t (no verdict)"; skip=$((skip+1))
@@ -157,9 +178,9 @@ run() {
 }
 
 case "${1:-}" in
-    --bootstrap) bootstrap ;;
-    --run) run ;;
-    --stop) stop ;;
-    --restart) restart ;;
+    --bootstrap|bootstrap) bootstrap ;;
+    --run|run) run ;;
+    --stop|stop) stop ;;
+    --restart|restart) restart ;;
     *) bootstrap; run ;;
 esac

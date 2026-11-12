@@ -75,9 +75,9 @@ fn create(dir: &Path, cn: &str) -> std::io::Result<ServerIdentity> {
 }
 
 fn load(dir: &Path) -> std::io::Result<ServerIdentity> {
+    use rustls::pki_types::pem::PemObject;
     let crt_pem = std::fs::read(dir.join("server.crt"))?;
     let key_pem = std::fs::read(dir.join("server.key"))?;
-    use rustls::pki_types::pem::PemObject;
     let certs = CertificateDer::pem_slice_iter(&crt_pem)
         .collect::<Result<Vec<_>, _>>()
         .map_err(to_io)?;

@@ -29,17 +29,40 @@ source tree). Each `.test` file is run with
 | `get-ppd`, `get-ppd-printer` | `cups-driverd cat` streams the PPD body; `printer-uri` resolves the driverless `everywhere` PPD |
 | `get-ppds`, `get-ppds-make`, `get-ppds-product`, `get-ppds-drv-only` | `cups-driverd list` → per-driver `ppd-*` groups; honors `include-schemes=drv`, `ppd-make`, `ppd-product`, `limit` |
 
-## RFC / PWG suites — 17/18 each
+## Reproducing — `scripts/conformance.sh`
 
-`ipp-1.1`, `ipp-2.0`, `ipp-2.1`, `ipp-2.2`, `ipp-everywhere` each pass all
-assertions except the tail `Get-Job-Attributes Until Job Complete` poll.
-That sub-test re-uses `$job-id` captured from `Get-Jobs
-which-jobs=not-completed` — when it selects a *held* `Create-Job` (a job
-that intentionally has no document yet), the job legitimately never
-reaches a final `job-state >6`, so the repeat loop exhausts. The daemon
-sends a valid ~400-byte response for every poll; the mechanism passes
-whenever the polled job actually completes (verified with an explicit
-print-and-poll test).
+`scripts/conformance.sh` bootstraps a scratch daemon under a FHS-like root
+(default `/tmp/pw-conf`, port `8631`) and runs the whole matrix:
+
+```text
+conformance.sh --bootstrap   build workspace + scratch root + start daemon
+conformance.sh --run         run the ipptool matrix
+conformance.sh --stop        stop the scratch daemon (frees the port)
+conformance.sh --restart     rebuild cupsd + fresh daemon
+conformance.sh               bootstrap + run
+```
+
+Current result: **31 passed / 0 failed / 0 skipped** — all
+`get-printer-*`/`get-jobs`/`get-ppds*`/`print-*`/`create-job`/PPD ops and
+all five `ipp-*` RFC suites green.
+
+`--run` first seeds one pending job (`Create-Job` with no `Send-Document`
+→ `pending-held`/`job-data-insufficient`) so `cancel-current-job`'s
+`Get-Jobs` always has a `not-completed` job to find; the instant `file`
+backend would otherwise complete every job before the query.
+
+## RFC / PWG suites — all green
+
+`ipp-1.1`, `ipp-2.0`, `ipp-2.1`, `ipp-2.2`, `ipp-everywhere` each pass
+their full sub-test matrix (~48–50 `[PASS]` assertions each at 100%). The
+suites exercise create/send-document/cancel/hold/release cycles against
+the scratch queue.
+
+Note on the runner: it detects verdicts with `grep -q '[PASS]'`/`'[FAIL]'`
+over a *herestring*, not `echo | grep -q` — under `pipefail`, `grep -q`
+exits on the first match while `echo` still writes to the closed pipe,
+so a >64KB suite output would SIGPIPE `echo` and falsely read "no
+verdict".
 
 ## Auth-required — `client-error-forbidden` is the *correct* result
 

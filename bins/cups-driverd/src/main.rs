@@ -461,7 +461,7 @@ fn main() {
                 "everywhere" => print!("{}", driverless_ppd()),
                 _ if name.starts_with("drv://") => {
                     if let Some(p) = drv_ppd(name) {
-                        print!("{p}")
+                        print!("{p}");
                     } else {
                         eprintln!("ERROR: PPD \"{name}\" not found.");
                         std::process::exit(1);
