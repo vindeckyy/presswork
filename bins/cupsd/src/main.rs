@@ -999,6 +999,94 @@ fn ipp_dispatch(
     }
 }
 
+/// Fetch a queue's PPD text via `cups-driverd cat <ppd-name>` — the stored
+/// `Option ppd-name` (driver selection) wins, else the driverless `everywhere`
+/// model. Returns `None` when the helper can't produce one.
+fn printer_ppd(p: &printer::Printer, server_bin: &std::path::Path) -> Option<String> {
+    let name = p
+        .options
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("ppd-name"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "everywhere".to_string());
+    let driverd = server_bin.join("daemon").join("cups-driverd");
+    let base = server_bin
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    let out = std::process::Command::new(driverd)
+        .args(["cat", &name])
+        .env("PPDDIR", base.join("ppd"))
+        .env("DRVROOT", base.join("drv"))
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parse a PPD's `*cupsFilter` and `*cupsFilter2` lines into
+/// `(final_mime, cost, program)` candidates — the device-consumable formats
+/// and the final driver filter for each.
+fn ppd_filters(ppd: &str) -> Vec<(String, u32, String)> {
+    let mut out = Vec::new();
+    for line in ppd.lines() {
+        let Some(rest) = line
+            .trim()
+            .strip_prefix("*cupsFilter")
+            .or_else(|| line.trim().strip_prefix("*cupsFilter2"))
+        else {
+            continue;
+        };
+        // `*cupsFilter: "mime cost prog"` / `*cupsFilter2: "dst src cost prog"`.
+        let val = rest
+            .split_once(':')
+            .map(|(_, v)| v.trim().trim_matches('"'))
+            .unwrap_or("");
+        let parts: Vec<&str> = val.split_whitespace().collect();
+        if line.contains("cupsFilter2") {
+            if parts.len() >= 4 {
+                out.push((parts[0].into(), parts[2].parse().unwrap_or(0), parts[3].into()));
+            }
+        } else if parts.len() >= 3 {
+            out.push((parts[0].into(), parts[1].parse().unwrap_or(0), parts[2].into()));
+        }
+    }
+    out
+}
+
+/// Pick the device-consumable MIME a queue's PPD declares — the cheapest
+/// `*cupsFilter`/`*cupsFilter2` target. `None` → caller uses the raw default.
+fn ppd_final_type(p: &printer::Printer, server_bin: &std::path::Path) -> Option<String> {
+    let ppd = printer_ppd(p, server_bin)?;
+    let mut fs = ppd_filters(&ppd);
+    if fs.is_empty() {
+        return None;
+    }
+    fs.sort_by_key(|(_, cost, _)| *cost);
+    Some(fs[0].0.clone())
+}
+
+/// The PPD's final driver filter for `dst` — `program != "-"` runs as the
+/// last stage before the backend (e.g. `rastertofoo`).
+fn ppd_final_filter(
+    p: &printer::Printer,
+    server_bin: &std::path::Path,
+    dst: &str,
+) -> Option<mime_db::Conv> {
+    let ppd = printer_ppd(p, server_bin)?;
+    ppd_filters(&ppd)
+        .into_iter()
+        .filter(|(_, _, prog)| prog != "-")
+        .find(|(d, _, _)| d == dst)
+        .map(|(d, cost, prog)| mime_db::Conv {
+            src: d,
+            dst: "application/vnd.cups-raw".into(),
+            cost,
+            program: prog,
+        })
+}
+
 /// `start_job` scheduler tick — pick the first pending job whose printer is
 /// idle + accepting, resolve its filter chain, and spawn the pipeline in a
 /// watcher thread that marks the job completed/aborted on exit.
@@ -1046,9 +1134,11 @@ fn schedule_tick(
                 continue;
             };
             let data = job::Job::data_path(&request_root, j.id, file.num);
-            // Target format: raw passthrough for P2 (driverless PPD formats
-            // land in P7). ipp/socket/file printers accept raw streams.
-            let dst = "application/vnd.cups-raw".to_string();
+            // Target format: the queue's PPD `*cupsFilter`/`*cupsFilter2`
+            // declarations pick the device-consumable MIME (P7); bare queues
+            // take the raw passthrough.
+            let dst = ppd_final_type(p, &server_bin)
+                .unwrap_or_else(|| "application/vnd.cups-raw".to_string());
             let spec = pipeline::JobSpec {
                 printer: p.name.clone(),
                 job_id: j.id,
@@ -1075,7 +1165,18 @@ fn schedule_tick(
     };
 
     let chain = mime.filter_chain(&src, &dst, 0).unwrap_or_default();
-    let chain: Vec<mime_db::Conv> = chain.into_iter().cloned().collect();
+    let mut chain: Vec<mime_db::Conv> = chain.into_iter().cloned().collect();
+    // Append the queue's PPD final driver filter (`*cupsFilter` `program`) —
+    // e.g. `rastertofoo` converts `cups-raster` to the device stream.
+    if let Some(p) = registry
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .find(&spec.printer)
+    {
+        if let Some(ppf) = ppd_final_filter(&p, &server_bin, &dst) {
+            chain.push(ppf);
+        }
+    }
 
     match spec.spawn(&chain) {
         Ok(mut pipe) => {
