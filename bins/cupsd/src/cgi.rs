@@ -101,7 +101,13 @@ pub fn run(
         // HTTP_FOO from each request header (skip hop-by-hop).
         let key = name
             .chars()
-            .map(|c| if c == '-' { '_' } else { c.to_ascii_uppercase() })
+            .map(|c| {
+                if c == '-' {
+                    '_'
+                } else {
+                    c.to_ascii_uppercase()
+                }
+            })
             .collect::<String>();
         cmd.env(format!("HTTP_{key}"), value);
     }
@@ -124,7 +130,11 @@ fn parse_output(bytes: &[u8]) -> Response {
         .or_else(|| bytes.windows(2).position(|w| w == b"\n\n"));
     let (head, body) = match sep {
         Some(i) => {
-            let skip = if &bytes[i..i + 4] == b"\r\n\r\n" { 4 } else { 2 };
+            let skip = if &bytes[i..i + 4] == b"\r\n\r\n" {
+                4
+            } else {
+                2
+            };
             (&bytes[..i], &bytes[i + skip..])
         }
         None => (bytes, &[][..]),
@@ -134,7 +144,12 @@ fn parse_output(bytes: &[u8]) -> Response {
     for line in std::str::from_utf8(head).unwrap_or("").lines() {
         let line = line.trim_end_matches('\r');
         if let Some(v) = line.strip_prefix("Status:") {
-            status = v.trim().split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(200);
+            status = v
+                .trim()
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(200);
         } else if let Some(v) = line.strip_prefix("Content-Type:") {
             ctype = v.trim().to_string();
         }
@@ -168,5 +183,14 @@ pub fn dispatch(
     if req.method == Method::Post && script == "home.cgi" {
         return None; // POST goes to CGIs that accept it; home doesn't.
     }
-    run(server_bin, script, options, req, client_addr, host, port, encrypted)
+    run(
+        server_bin,
+        script,
+        options,
+        req,
+        client_addr,
+        host,
+        port,
+        encrypted,
+    )
 }

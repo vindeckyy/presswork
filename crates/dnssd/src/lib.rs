@@ -80,14 +80,9 @@ impl Advertiser {
     /// `host` is the mDNS hostname (`<host>.local`), `computer` the
     /// human-readable machine name, `port` the IPP listen port, `tls`
     /// whether `_ipps._tcp`/`TLS=` is advertised.
-    pub fn start(
-        host: &str,
-        computer: &str,
-        port: u16,
-        tls: bool,
-    ) -> std::io::Result<Self> {
-        let daemon = ServiceDaemon::new()
-            .map_err(|e| std::io::Error::other(format!("mdns-sd: {e}")))?;
+    pub fn start(host: &str, computer: &str, port: u16, tls: bool) -> std::io::Result<Self> {
+        let daemon =
+            ServiceDaemon::new().map_err(|e| std::io::Error::other(format!("mdns-sd: {e}")))?;
         let mut adv = Self {
             daemon,
             host: normalize_local(host),
@@ -108,7 +103,11 @@ impl Advertiser {
         t.insert("qtotal".into(), "1".into());
         t.insert(
             "rp".into(),
-            format!("{}/{}", if p.is_class { "classes" } else { "printers" }, p.name),
+            format!(
+                "{}/{}",
+                if p.is_class { "classes" } else { "printers" },
+                p.name
+            ),
         );
         t.insert(
             "ty".into(),
@@ -154,7 +153,11 @@ impl Advertiser {
             t.insert("Fax".into(), "T".into());
             t.insert(
                 "rfo".into(),
-                format!("{}/{}", if p.is_class { "classes" } else { "printers" }, p.name),
+                format!(
+                    "{}/{}",
+                    if p.is_class { "classes" } else { "printers" },
+                    p.name
+                ),
             );
         }
         t.insert("printer-type".into(), format!("{:#010x}", p.printer_type));
@@ -197,15 +200,30 @@ impl Advertiser {
 
         // 2. `_fax-ipp._tcp` for fax queues.
         if p.is_fax {
-            names.push(self.register(&instance, "_fax-ipp._tcp.local.", self.port, self.txt_record(p, false))?);
+            names.push(self.register(
+                &instance,
+                "_fax-ipp._tcp.local.",
+                self.port,
+                self.txt_record(p, false),
+            )?);
         }
 
         // 3. `_ipp._tcp` with the full TXT record.
-        names.push(self.register(&instance, "_ipp._tcp.local.", self.port, self.txt_record(p, false))?);
+        names.push(self.register(
+            &instance,
+            "_ipp._tcp.local.",
+            self.port,
+            self.txt_record(p, false),
+        )?);
 
         // 4. `_ipps._tcp` when TLS is enabled (`TLS=` in TXT).
         if self.tls {
-            names.push(self.register(&instance, "_ipps._tcp.local.", self.port, self.txt_record(p, true))?);
+            names.push(self.register(
+                &instance,
+                "_ipps._tcp.local.",
+                self.port,
+                self.txt_record(p, true),
+            )?);
         }
 
         self.registered.insert(p.name.clone(), names);
@@ -247,12 +265,9 @@ impl Advertiser {
         txt: HashMap<String, String>,
     ) -> std::io::Result<String> {
         let info = ServiceInfo::new(
-            regtype,
-            instance,
-            &self.host,
-            "",           // no static ip — let mdns-sd pick the host addrs
-            port,
-            txt,
+            regtype, instance, &self.host,
+            "", // no static ip — let mdns-sd pick the host addrs
+            port, txt,
         )
         .map_err(|e| std::io::Error::other(format!("service info: {e}")))?;
         let full = info.get_fullname().to_string();
@@ -287,12 +302,13 @@ pub fn browse_ipp(timeout: Duration) -> Vec<RemotePrinter> {
             match receiver.recv_timeout(Duration::from_millis(120)) {
                 Ok(ServiceEvent::ServiceResolved(info)) => {
                     if let Some(rp) = info.get_property_val_str("rp") {
-                        let host = info
-                            .get_hostname()
-                            .trim_end_matches('.')
-                            .to_string();
+                        let host = info.get_hostname().trim_end_matches('.').to_string();
                         let port = info.get_port();
-                        let scheme = if regtype.starts_with("_ipps") { "ipps" } else { "ipp" };
+                        let scheme = if regtype.starts_with("_ipps") {
+                            "ipps"
+                        } else {
+                            "ipp"
+                        };
                         out.push(RemotePrinter {
                             uri: format!("{scheme}://{host}:{port}/{rp}"),
                             name: info.get_fullname().to_string(),

@@ -89,9 +89,69 @@ pub fn requested_attrs(req: &IppMessage) -> Option<Vec<String>> {
     }
 }
 
+/// IPP job-attribute names — the bases for `xxx-default`/`xxx-supported`
+/// job-template attributes (RFC 8011 §5.2 + media-col).
+const JOB_ATTRS: &[&str] = &[
+    "copies",
+    "finishings",
+    "job-hold-until",
+    "job-priority",
+    "job-sheets",
+    "media",
+    "media-col",
+    "multiple-document-handling",
+    "multiple-operation-time-out",
+    "number-up",
+    "orientation-requested",
+    "output-bin",
+    "page-ranges",
+    "print-color-mode",
+    "print-quality",
+    "print-scaling",
+    "printer-resolution",
+    "sides",
+    "jpeg-k-octets",
+    "jpeg-x-dimension",
+    "jpeg-y-dimension",
+    "pdf-k-octets",
+    "pdf-versions",
+    "print-as-raster",
+];
+
+/// Is `name` a job-template attribute (`xxx-default`, `xxx-supported`
+/// whose base is a job attribute, or a media-col database/ready entry)?
+fn is_job_template(name: &str) -> bool {
+    if matches!(
+        name,
+        "media-col-database" | "media-col-ready" | "media-ready"
+    ) {
+        return true;
+    }
+    let base = name
+        .strip_suffix("-default")
+        .or_else(|| name.strip_suffix("-supported"))
+        .or_else(|| name.strip_suffix("-ready"));
+    match base {
+        Some(b) => JOB_ATTRS.contains(&b) || b.starts_with("media-"),
+        None => JOB_ATTRS.contains(&name),
+    }
+}
+
 /// `cupsArrayFind(ra, name)` — `requested-attributes` filter predicate.
+/// The list may name individual attributes *or* an attribute group:
+/// `all` (everything), `printer-description` (non-template attrs),
+/// `job-template` (job-template attrs), `printer-defaults`, …
 fn wants(ra: &Option<Vec<String>>, name: &str) -> bool {
-    ra.as_ref().is_none_or(|ra| ra.iter().any(|n| n == name))
+    ra.as_ref().is_none_or(|ra| {
+        ra.iter().any(|n| {
+            n == name
+                || n == "all"
+                || (n == "job-template" && is_job_template(name))
+                || (n == "printer-description" && !is_job_template(name))
+                || (n == "printer-defaults" && name.ends_with("-default"))
+                || (n == "document-format" && name.starts_with("document-format"))
+        })
+    })
 }
 
 /// URI assembly mirroring `httpAssembleURIf` for queue URIs:
@@ -408,22 +468,9 @@ fn stored_attrs(p: &Printer, ctx: &Ctx) -> Vec<Attribute> {
 
     add1(
         &mut v,
-        "charset-configured",
-        tags::CHARSET,
-        Value::Charset("utf-8".into()),
-    );
-    add1(
-        &mut v,
         "color-supported",
         tags::BOOLEAN,
         Value::Boolean(p.ptype & ptype::COLOR != 0),
-    );
-    add1(&mut v, "compression-supported", tags::KEYWORD, kw("none"));
-    add1(
-        &mut v,
-        "copies-supported",
-        tags::RANGE,
-        Value::Range { low: 1, high: 9999 },
     );
     if !p.uuid.is_empty() {
         add1(
@@ -463,31 +510,17 @@ fn stored_attrs(p: &Printer, ctx: &Ctx) -> Vec<Attribute> {
     add1(&mut v, "finishings-default", tags::ENUM, Value::Enum(3));
     add1(
         &mut v,
-        "generated-natural-language-supported",
-        tags::LANGUAGE,
-        Value::NaturalLanguage(ctx.default_language.as_str().into()),
-    );
-    add1(
-        &mut v,
         "printer-info",
         tags::TEXT,
         Value::Text(p.info.as_deref().unwrap_or(&p.name).into()),
     );
-    addn(
-        &mut v,
-        "ipp-versions-supported",
-        tags::KEYWORD,
-        vec![kw("1.0"), kw("1.1"), kw("2.0"), kw("2.1")],
-    );
     add1(&mut v, "ipp-features-supported", tags::KEYWORD, kw("none"));
-    if let Some(l) = &p.location {
-        add1(
-            &mut v,
-            "printer-location",
-            tags::TEXT,
-            Value::Text(l.as_str().into()),
-        );
-    }
+    add1(
+        &mut v,
+        "printer-location",
+        tags::TEXT,
+        Value::Text(p.location.as_deref().unwrap_or("").into()),
+    );
     if let Some(g) = &p.geo_location {
         add1(
             &mut v,
@@ -496,14 +529,25 @@ fn stored_attrs(p: &Printer, ctx: &Ctx) -> Vec<Attribute> {
             Value::Uri(g.as_str().into()),
         );
     }
-    if let Some(m) = &p.make_model {
-        add1(
-            &mut v,
-            "printer-make-and-model",
-            tags::TEXT,
-            Value::Text(m.as_str().into()),
-        );
-    }
+    add1(
+        &mut v,
+        "printer-make-and-model",
+        tags::TEXT,
+        Value::Text(
+            p.make_model
+                .as_deref()
+                .unwrap_or_else(|| {
+                    // Upstream falls back to a driver/backend-derived name;
+                    // for a bare queue it reports the device-uri scheme.
+                    p.device_uri
+                        .split("://")
+                        .next()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("Unknown")
+                })
+                .into(),
+        ),
+    );
     if let Some(o) = &p.organization {
         add1(
             &mut v,
@@ -533,12 +577,6 @@ fn stored_attrs(p: &Printer, ctx: &Ctx) -> Vec<Attribute> {
         "printer-name",
         tags::NAME,
         Value::Name(p.name.as_str().into()),
-    );
-    add1(
-        &mut v,
-        "natural-language-configured",
-        tags::LANGUAGE,
-        Value::NaturalLanguage(ctx.default_language.as_str().into()),
     );
     add1(
         &mut v,
@@ -840,6 +878,41 @@ pub fn common_data(ctx: &Ctx) -> Vec<Attribute> {
         .map(|s| kw(s))
         .collect(),
     );
+    // `media-col-default` — the resolved default media collection
+    // (na_letter_8.5x11in, 3 mm margins). Nested `media-size` collection.
+    let mut media_col = Vec::new();
+    media_col.push(Attribute::new(
+        "media-size",
+        tags::BEGIN_COLLECTION,
+        vec![Value::Collection(vec![
+            Attribute::new("x-dimension", tags::INTEGER, vec![Value::Integer(21590)]),
+            Attribute::new("y-dimension", tags::INTEGER, vec![Value::Integer(27940)]),
+        ])],
+    ));
+    for m in [
+        "media-top-margin",
+        "media-bottom-margin",
+        "media-left-margin",
+        "media-right-margin",
+    ] {
+        media_col.push(Attribute::new(m, tags::INTEGER, vec![Value::Integer(300)]));
+    }
+    media_col.push(Attribute::new(
+        "media-source",
+        tags::KEYWORD,
+        vec![kw("auto")],
+    ));
+    media_col.push(Attribute::new(
+        "media-type",
+        tags::KEYWORD,
+        vec![kw("stationery")],
+    ));
+    add1(
+        &mut v,
+        "media-col-default",
+        tags::BEGIN_COLLECTION,
+        Value::Collection(media_col),
+    );
     addn(
         &mut v,
         "multiple-document-handling-supported",
@@ -869,6 +942,88 @@ pub fn common_data(ctx: &Ctx) -> Vec<Attribute> {
         "multiple-operation-time-out-action",
         tags::KEYWORD,
         kw("process-job"),
+    );
+    // Job-template defaults + the media database. `media-col-database`
+    // is a `1setOf collection` listing the media the printer can handle.
+    add1(&mut v, "copies-default", tags::INTEGER, Value::Integer(1));
+    add1(
+        &mut v,
+        "copies-supported",
+        tags::RANGE,
+        Value::Range { low: 1, high: 9999 },
+    );
+    add1(
+        &mut v,
+        "media-default",
+        tags::KEYWORD,
+        kw("na_letter_8.5x11in"),
+    );
+    addn(
+        &mut v,
+        "media-supported",
+        tags::KEYWORD,
+        [
+            "na_letter_8.5x11in",
+            "na_legal_8.5x14in",
+            "iso_a4_210x297mm",
+            "na_number-10_4.125x9.5in",
+        ]
+        .iter()
+        .map(|s| kw(s))
+        .collect(),
+    );
+    let media_col_db = |x: i32, y: i32| {
+        Value::Collection(vec![
+            Attribute::new(
+                "media-size",
+                tags::BEGIN_COLLECTION,
+                vec![Value::Collection(vec![
+                    Attribute::new("x-dimension", tags::INTEGER, vec![Value::Integer(x)]),
+                    Attribute::new("y-dimension", tags::INTEGER, vec![Value::Integer(y)]),
+                ])],
+            ),
+            Attribute::new("media-type", tags::KEYWORD, vec![kw("stationery")]),
+            Attribute::new("media-source", tags::KEYWORD, vec![kw("auto")]),
+        ])
+    };
+    addn(
+        &mut v,
+        "media-col-database",
+        tags::BEGIN_COLLECTION,
+        vec![
+            media_col_db(21590, 27940), // na_letter_8.5x11in
+            media_col_db(21590, 35560), // na_legal_8.5x14in
+            media_col_db(21000, 29700), // iso_a4_210x297mm
+        ],
+    );
+    add1(
+        &mut v,
+        "number-up-default",
+        tags::INTEGER,
+        Value::Integer(1),
+    );
+    add1(
+        &mut v,
+        "orientation-requested-default",
+        tags::ENUM,
+        Value::Enum(3), // portrait
+    );
+    add1(&mut v, "print-quality-default", tags::ENUM, Value::Enum(4));
+    add1(
+        &mut v,
+        "print-color-mode-default",
+        tags::KEYWORD,
+        kw("auto"),
+    );
+    add1(&mut v, "sides-default", tags::KEYWORD, kw("one-sided"));
+    addn(
+        &mut v,
+        "sides-supported",
+        tags::KEYWORD,
+        ["one-sided", "two-sided-long-edge", "two-sided-short-edge"]
+            .iter()
+            .map(|s| kw(s))
+            .collect(),
     );
     add1(
         &mut v,

@@ -70,15 +70,14 @@ fn forward(argv: &[String], real_uri: &str) -> i32 {
         .args(argv.iter().skip(1))
         .env("DEVICE_URI", real_uri)
         .exec(); // only returns on failure
-    backend_common::error(format_args!(
-        "dnssd: cannot exec {}: {err}",
-        ipp.display()
-    ));
+    backend_common::error(format_args!("dnssd: cannot exec {}: {err}", ipp.display()));
     backend_common::code::FAILED
 }
 
 #[cfg(not(unix))]
 fn forward(_argv: &[String], _real_uri: &str) -> i32 {
-    backend_common::error(format_args!("dnssd: ipp forwarding unsupported on this platform"));
+    backend_common::error(format_args!(
+        "dnssd: ipp forwarding unsupported on this platform"
+    ));
     backend_common::code::FAILED
 }

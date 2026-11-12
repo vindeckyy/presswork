@@ -298,9 +298,29 @@ mod tests {
     #[test]
     fn add_scope_and_drain() {
         let mut t = Subscriptions::new();
-        let a = t.add(Some("p1".into()), None, vec![Event::PrinterStateChanged], "u".into(), 0, None);
-        let _b = t.add(Some("p2".into()), None, vec![Event::All], "u".into(), 0, None);
-        t.push(Event::PrinterStateChanged, Some("p1"), None, None, "x".into());
+        let a = t.add(
+            Some("p1".into()),
+            None,
+            vec![Event::PrinterStateChanged],
+            "u".into(),
+            0,
+            None,
+        );
+        let _b = t.add(
+            Some("p2".into()),
+            None,
+            vec![Event::All],
+            "u".into(),
+            0,
+            None,
+        );
+        t.push(
+            Event::PrinterStateChanged,
+            Some("p1"),
+            None,
+            None,
+            "x".into(),
+        );
         assert_eq!(t.find(a).unwrap().pending(), 1);
         assert_eq!(t.drain(a).len(), 1);
         assert_eq!(t.drain(a).len(), 0); // drained
@@ -322,8 +342,21 @@ mod tests {
     #[test]
     fn job_scope_filters() {
         let mut t = Subscriptions::new();
-        let a = t.add(None, Some(7), vec![Event::JobStateChanged], "u".into(), 0, None);
-        t.push(Event::JobStateChanged, None, Some(8), None, "wrong job".into());
+        let a = t.add(
+            None,
+            Some(7),
+            vec![Event::JobStateChanged],
+            "u".into(),
+            0,
+            None,
+        );
+        t.push(
+            Event::JobStateChanged,
+            None,
+            Some(8),
+            None,
+            "wrong job".into(),
+        );
         t.push(Event::JobStateChanged, None, Some(7), None, "right".into());
         assert_eq!(t.find(a).unwrap().pending(), 1);
     }

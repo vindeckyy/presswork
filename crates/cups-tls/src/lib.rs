@@ -56,8 +56,7 @@ pub fn load_or_create(dir: &Path, cn: &str) -> std::io::Result<ServerIdentity> {
 /// Generate a self-signed cert + write it (mode 0600 key) to `dir`.
 fn create(dir: &Path, cn: &str) -> std::io::Result<ServerIdentity> {
     std::fs::create_dir_all(dir)?;
-    let mut params = rcgen::CertificateParams::new(vec![cn.to_string()])
-        .map_err(to_io)?;
+    let mut params = rcgen::CertificateParams::new(vec![cn.to_string()]).map_err(to_io)?;
     params.distinguished_name = rcgen::DistinguishedName::new();
     params
         .distinguished_name

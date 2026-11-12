@@ -44,10 +44,7 @@ fn main() {
             let (host, port, queue) = match parse_uri(&inv.device_uri) {
                 Some(t) => t,
                 None => {
-                    backend_common::error(format_args!(
-                        "lpd: bad device-uri {}",
-                        inv.device_uri
-                    ));
+                    backend_common::error(format_args!("lpd: bad device-uri {}", inv.device_uri));
                     return backend_common::code::FAILED;
                 }
             };
@@ -112,6 +109,9 @@ fn send(
     s.write_all(&[0])?;
     read_ack(&mut s)?;
 
-    backend_common::info(format_args!("lpd: job {} sent to {host}/{queue}", inv.job_id));
+    backend_common::info(format_args!(
+        "lpd: job {} sent to {host}/{queue}",
+        inv.job_id
+    ));
     Ok(())
 }

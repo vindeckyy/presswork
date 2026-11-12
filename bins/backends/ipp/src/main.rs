@@ -32,9 +32,7 @@ fn parse_uri(uri: &str) -> Option<Target> {
         None => (rest, "/".to_string()),
     };
     let (host, port) = match authority.rsplit_once(':') {
-        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => {
-            (h.to_string(), p.parse().ok()?)
-        }
+        Some((h, p)) if p.chars().all(|c| c.is_ascii_digit()) => (h.to_string(), p.parse().ok()?),
         _ => (authority.to_string(), if tls { 443 } else { 631 }),
     };
     Some(Target {
@@ -88,7 +86,8 @@ fn ipp_send(t: &Target, msg: &IppMessage, data: &[u8]) -> Result<IppMessage, i32
             backend_common::code::FAILED
         })?;
     let mut raw = Vec::new();
-    s.read_to_end(&mut raw).map_err(|_| backend_common::code::FAILED)?;
+    s.read_to_end(&mut raw)
+        .map_err(|_| backend_common::code::FAILED)?;
     let end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -114,10 +113,7 @@ fn print(_argv: &[String], inv: &backend_common::Invocation) -> i32 {
     let target = match parse_uri(&inv.device_uri) {
         Some(t) => t,
         None => {
-            backend_common::error(format_args!(
-                "ipp: bad device-uri {}",
-                inv.device_uri
-            ));
+            backend_common::error(format_args!("ipp: bad device-uri {}", inv.device_uri));
             return backend_common::code::FAILED;
         }
     };

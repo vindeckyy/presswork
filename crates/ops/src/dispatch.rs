@@ -90,7 +90,9 @@ impl Ctx<'_> {
     }
     /// Write guard on the subscription table.
     pub fn subs_write(&self) -> std::sync::RwLockWriteGuard<'_, events::Subscriptions> {
-        self.subscriptions.write().unwrap_or_else(|e| e.into_inner())
+        self.subscriptions
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
     }
     /// Emit an event to all covering subscriptions.
     pub fn event(&self, ev: events::Event, printer: Option<&str>, job: Option<i32>, text: String) {
@@ -99,7 +101,12 @@ impl Ctx<'_> {
 
     /// `cupsdRegisterPrinter` — advertise a shared printer via DNS-SD.
     pub fn dnssd_publish(&self, p: &printer::Printer) {
-        if let Some(adv) = self.dnssd.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        if let Some(adv) = self
+            .dnssd
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
             let _ = adv.publish(&dnssd::SharedPrinter {
                 name: p.name.clone(),
                 info: p.info.clone().unwrap_or_default(),
@@ -117,7 +124,12 @@ impl Ctx<'_> {
 
     /// `cupsdDeregisterPrinter` — stop advertising a printer.
     pub fn dnssd_unpublish(&self, name: &str) {
-        if let Some(adv) = self.dnssd.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        if let Some(adv) = self
+            .dnssd
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
             adv.unpublish(name);
         }
     }
@@ -806,9 +818,22 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
         return;
     }
     drop(jobs);
-    ctx.event(events::Event::JobCreated, Some(&dest), Some(id), format!("Job {id} created."));
+    ctx.event(
+        events::Event::JobCreated,
+        Some(&dest),
+        Some(id),
+        format!("Job {id} created."),
+    );
     resp.code = status::OK;
-    add_job_group(resp, ctx.jobs.read().unwrap_or_else(|e| e.into_inner()).get(id).unwrap(), ctx);
+    add_job_group(
+        resp,
+        ctx.jobs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .unwrap(),
+        ctx,
+    );
 }
 
 /// `create_job()` — allocates an empty job awaiting Send-Document(s).
@@ -844,9 +869,22 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         return;
     }
     drop(jobs);
-    ctx.event(events::Event::JobCreated, Some(&dest), Some(id), format!("Job {id} created."));
+    ctx.event(
+        events::Event::JobCreated,
+        Some(&dest),
+        Some(id),
+        format!("Job {id} created."),
+    );
     resp.code = status::OK;
-    add_job_group(resp, ctx.jobs.read().unwrap_or_else(|e| e.into_inner()).get(id).unwrap(), ctx);
+    add_job_group(
+        resp,
+        ctx.jobs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(id)
+            .unwrap(),
+        ctx,
+    );
 }
 
 /// `send_document()` — attach a document to an existing Create-Job job.
@@ -945,20 +983,48 @@ fn transition_job(
 }
 
 fn hold_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    transition_job(req, resp, ctx, uri_attr, JobState::PendingHeld, "Job not found.");
+    transition_job(
+        req,
+        resp,
+        ctx,
+        uri_attr,
+        JobState::PendingHeld,
+        "Job not found.",
+    );
 }
 
 fn release_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    transition_job(req, resp, ctx, uri_attr, JobState::Pending, "Job not found.");
+    transition_job(
+        req,
+        resp,
+        ctx,
+        uri_attr,
+        JobState::Pending,
+        "Job not found.",
+    );
 }
 
 fn restart_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    transition_job(req, resp, ctx, uri_attr, JobState::Pending, "Job not found.");
+    transition_job(
+        req,
+        resp,
+        ctx,
+        uri_attr,
+        JobState::Pending,
+        "Job not found.",
+    );
 }
 
 /// `Close-Job` — a Create-Job with no more documents becomes printable.
 fn close_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    transition_job(req, resp, ctx, uri_attr, JobState::Pending, "Job not found.");
+    transition_job(
+        req,
+        resp,
+        ctx,
+        uri_attr,
+        JobState::Pending,
+        "Job not found.",
+    );
 }
 
 /// `Cancel-My-Jobs` — cancel every job owned by the requesting user.
@@ -1145,7 +1211,13 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx) {
     add(
         "job-state-reasons",
         tags::KEYWORD,
-        Value::Keyword(job.reasons.first().cloned().unwrap_or_default().into()),
+        Value::Keyword(
+            job.reasons
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "none".into())
+                .into(),
+        ),
     );
     add(
         "job-originating-user-name",
@@ -1380,10 +1452,17 @@ fn add_modify_printer(
     drop(reg);
     save_printers(ctx);
     ctx.event(
-        if exists { events::Event::PrinterModified } else { events::Event::PrinterAdded },
+        if exists {
+            events::Event::PrinterModified
+        } else {
+            events::Event::PrinterAdded
+        },
         Some(&name),
         None,
-        format!("Printer {name} {}.", if exists { "modified" } else { "added" }),
+        format!(
+            "Printer {name} {}.",
+            if exists { "modified" } else { "added" }
+        ),
     );
     // DNS-SD: (re)advertise when shared, withdraw when unshared.
     if let Some(p) = ctx.reg().find(&name).cloned() {
@@ -1653,7 +1732,10 @@ fn dest_name(uri: &str) -> Option<String> {
             return Some(uri[i + seg.len()..].split('?').next()?.to_string());
         }
     }
-    uri.rsplit('/').next().filter(|n| !n.is_empty()).map(str::to_string)
+    uri.rsplit('/')
+        .next()
+        .filter(|n| !n.is_empty())
+        .map(str::to_string)
 }
 
 /// `notify-events` attr -> parsed Event mask. `None` when missing/invalid.
@@ -1676,12 +1758,20 @@ fn notify_events(req: &IppMessage) -> Option<Vec<events::Event>> {
 fn requesting_user(req: &IppMessage, ctx: &Ctx) -> String {
     ctx.username
         .clone()
-        .or_else(|| req.find(tags::OPERATION, "requesting-user-name").and_then(attr_text))
+        .or_else(|| {
+            req.find(tags::OPERATION, "requesting-user-name")
+                .and_then(attr_text)
+        })
         .unwrap_or_else(|| "anonymous".into())
 }
 
 /// `Create-{Printer,Job}-Subscriptions` — `create_subscription`.
-fn create_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+fn create_subscription(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
     let events = match notify_events(req) {
         Some(e) => e,
         None => {
@@ -1692,15 +1782,11 @@ fn create_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_a
     let job_sub = req.code == op::CREATE_JOB_SUBSCRIPTIONS;
     let (printer, job_id) = if job_sub {
         let jid = int_attr(req, "job-id").map(|j| j as i32);
-        let dest = uri_attr.and_then(attr_text).and_then(|u| {
-            dest_name(&u)
-        });
+        let dest = uri_attr.and_then(attr_text).and_then(|u| dest_name(&u));
         (dest, jid)
     } else {
         (
-            uri_attr
-                .and_then(attr_text)
-                .and_then(|u| dest_name(&u)),
+            uri_attr.and_then(attr_text).and_then(|u| dest_name(&u)),
             None,
         )
     };
@@ -1741,16 +1827,29 @@ fn add_sub_group(resp: &mut IppMessage, s: &events::Subscription, ctx: &Ctx) {
         .map(|e| Value::Keyword(e.clone().into()))
         .collect();
     if g.find("notify-events").is_none() {
-        g.attributes.push(Attribute::new("notify-events", tags::KEYWORD, evs));
+        g.attributes
+            .push(Attribute::new("notify-events", tags::KEYWORD, evs));
     }
     let mut add = |name: &str, tag: u8, v: Value| {
         if g.find(name).is_none() {
             g.attributes.push(Attribute::new(name, tag, vec![v]));
         }
     };
-    add("notify-subscription-id", tags::INTEGER, Value::Integer(s.id));
-    add("notify-subscriber-user-name", tags::NAME, Value::Name(s.owner.clone().into()));
-    add("notify-lease-duration", tags::INTEGER, Value::Integer(s.lease_remaining()));
+    add(
+        "notify-subscription-id",
+        tags::INTEGER,
+        Value::Integer(s.id),
+    );
+    add(
+        "notify-subscriber-user-name",
+        tags::NAME,
+        Value::Name(s.owner.clone().into()),
+    );
+    add(
+        "notify-lease-duration",
+        tags::INTEGER,
+        Value::Integer(s.lease_remaining()),
+    );
     if let Some(p) = &s.printer {
         let scheme = if ctx.is_encrypted { "ipps" } else { "ipp" };
         add(
@@ -1763,16 +1862,23 @@ fn add_sub_group(resp: &mut IppMessage, s: &events::Subscription, ctx: &Ctx) {
         add("notify-job-id", tags::INTEGER, Value::Integer(j));
     }
     if let Some(d) = &s.user_data {
-        add("notify-user-data", tags::STRING, Value::OctetString(d.clone()));
+        add(
+            "notify-user-data",
+            tags::STRING,
+            Value::OctetString(d.clone()),
+        );
     }
 }
 
 /// `Get-Subscriptions` — `get_subscriptions`.
-fn get_subscriptions(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+fn get_subscriptions(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
     resp.code = status::OK;
-    let printer = uri_attr
-        .and_then(attr_text)
-        .and_then(|u| dest_name(&u));
+    let printer = uri_attr.and_then(attr_text).and_then(|u| dest_name(&u));
     let owner = req
         .find(tags::OPERATION, "requesting-user-name")
         .and_then(attr_text)
@@ -1795,12 +1901,20 @@ fn get_subscriptions(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_att
 /// `Get-Subscription-Attributes`.
 fn get_subscription_attrs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     let Some(id) = int_attr(req, "notify-subscription-id").map(|i| i as i32) else {
-        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-id.");
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing notify-subscription-id.",
+        );
         return;
     };
     let subs = ctx.subs();
     let Some(s) = subs.find(id) else {
-        send_status(resp, status::ERROR_NOT_FOUND, "Subscription #{id} not found.");
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "Subscription #{id} not found.",
+        );
         return;
     };
     let s2 = s.clone();
@@ -1812,7 +1926,11 @@ fn get_subscription_attrs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
 /// `Renew-Subscription`.
 fn renew_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     let Some(id) = int_attr(req, "notify-subscription-id").map(|i| i as i32) else {
-        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-id.");
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing notify-subscription-id.",
+        );
         return;
     };
     if ctx.subs_write().renew(id) {
@@ -1824,20 +1942,32 @@ fn renew_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             vec![Value::Integer(id)],
         ));
     } else {
-        send_status(resp, status::ERROR_NOT_FOUND, "Subscription #{id} not found.");
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "Subscription #{id} not found.",
+        );
     }
 }
 
 /// `Cancel-Subscription`.
 fn cancel_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     let Some(id) = int_attr(req, "notify-subscription-id").map(|i| i as i32) else {
-        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-id.");
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing notify-subscription-id.",
+        );
         return;
     };
     if ctx.subs_write().remove(id).is_some() {
         resp.code = status::OK;
     } else {
-        send_status(resp, status::ERROR_NOT_FOUND, "Subscription #{id} not found.");
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "Subscription #{id} not found.",
+        );
     }
 }
 
@@ -1856,7 +1986,11 @@ fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         })
         .unwrap_or_default();
     if ids.is_empty() {
-        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-ids.");
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing notify-subscription-ids.",
+        );
         return;
     }
     resp.code = status::OK;
@@ -1870,10 +2004,22 @@ fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
                 g.attributes.push(Attribute::new(name, tag, vec![v]));
             };
             add("notify-subscription-id", tags::INTEGER, Value::Integer(id));
-            add("notify-sequence-number", tags::INTEGER, Value::Integer(n.seq));
-            add("notify-subscribed-event", tags::KEYWORD, Value::Keyword(n.event.name().into()));
+            add(
+                "notify-sequence-number",
+                tags::INTEGER,
+                Value::Integer(n.seq),
+            );
+            add(
+                "notify-subscribed-event",
+                tags::KEYWORD,
+                Value::Keyword(n.event.name().into()),
+            );
             if let Some(p) = &n.printer {
-                add("notify-printer-uri", tags::URI, Value::Uri(p.clone().into()));
+                add(
+                    "notify-printer-uri",
+                    tags::URI,
+                    Value::Uri(p.clone().into()),
+                );
             }
             if let Some(j) = n.job_id {
                 add("notify-job-id", tags::INTEGER, Value::Integer(j));
@@ -1881,7 +2027,11 @@ fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             if let Some(js) = n.job_state {
                 add("job-state", tags::ENUM, Value::Enum(js));
             }
-            add("notify-text", tags::TEXT, Value::Text(n.text.clone().into()));
+            add(
+                "notify-text",
+                tags::TEXT,
+                Value::Text(n.text.clone().into()),
+            );
         }
     }
     if !found_any {

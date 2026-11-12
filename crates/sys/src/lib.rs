@@ -196,9 +196,7 @@ pub fn socket_family(fd: std::os::fd::RawFd) -> i32 {
     let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
     let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
     // SAFETY: `ss`/`len` are valid out-params; `fd` is an open socket.
-    let rc = unsafe {
-        libc::getsockname(fd, &mut ss as *mut _ as *mut libc::sockaddr, &mut len)
-    };
+    let rc = unsafe { libc::getsockname(fd, &mut ss as *mut _ as *mut libc::sockaddr, &mut len) };
     if rc == 0 {
         i32::from(ss.ss_family)
     } else {

@@ -246,11 +246,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         let dnssd_on = cfg.cupsd.browsing
             && cfg.cupsd.browse_local_protocols.0 & cups_config::BrowseProtocols::DNSSD.0 != 0;
         if dnssd_on {
-            let host = cfg
-                .cupsd
-                .dnssd_host_name
-                .clone()
-                .unwrap_or_else(hostname);
+            let host = cfg.cupsd.dnssd_host_name.clone().unwrap_or_else(hostname);
             let computer = cfg
                 .cupsd
                 .dnssd_computer_name
@@ -310,12 +306,24 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         bound += 1;
                         log.err(cups_log::Level::Info, "Listening on activated unix socket.");
                         join.spawn(accept_unix(
-                            l, tls.clone(), opts.clone(), doc_root.clone(), registry.clone(),
-                            cfg.clone(), log.clone(), jobs.clone(), mime.clone(), subs.clone(),
-                            dnssd_state.clone(), server_root.clone(),
+                            l,
+                            tls.clone(),
+                            opts.clone(),
+                            doc_root.clone(),
+                            registry.clone(),
+                            cfg.clone(),
+                            log.clone(),
+                            jobs.clone(),
+                            mime.clone(),
+                            subs.clone(),
+                            dnssd_state.clone(),
+                            server_root.clone(),
                         ));
                     }
-                    Err(e) => log.err(cups_log::Level::Error, format!("activated unix socket: {e}")),
+                    Err(e) => log.err(
+                        cups_log::Level::Error,
+                        format!("activated unix socket: {e}"),
+                    ),
                 }
             }
             f if f == libc::AF_INET || f == libc::AF_INET6 => {
@@ -326,9 +334,19 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         bound += 1;
                         log.err(cups_log::Level::Info, "Listening on activated TCP socket.");
                         join.spawn(accept_tcp(
-                            l, false, tls.clone(), opts.clone(), doc_root.clone(),
-                            registry.clone(), cfg.clone(), log.clone(), jobs.clone(),
-                            mime.clone(), subs.clone(), dnssd_state.clone(), server_root.clone(),
+                            l,
+                            false,
+                            tls.clone(),
+                            opts.clone(),
+                            doc_root.clone(),
+                            registry.clone(),
+                            cfg.clone(),
+                            log.clone(),
+                            jobs.clone(),
+                            mime.clone(),
+                            subs.clone(),
+                            dnssd_state.clone(),
+                            server_root.clone(),
                         ));
                     }
                     Err(e) => log.err(cups_log::Level::Error, format!("activated socket: {e}")),
@@ -341,7 +359,11 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
     }
 
     // Bind configured listeners (skipped under socket activation).
-    for ln in if bound == 0 { &cfg.cupsd.listeners[..] } else { &[][..] } {
+    for ln in if bound == 0 {
+        &cfg.cupsd.listeners[..]
+    } else {
+        &[][..]
+    } {
         match &ln.addr {
             ListenAddr::Tcp(addr) => match TcpListener::bind(addr).await {
                 Ok(l) => {
@@ -694,8 +716,12 @@ struct ConnArgs<'a> {
 }
 
 /// `serve_connection` bound to a dispatch_req closure.
-async fn serve_conn<S>(stream: &mut S, opts: &httpd::ServerOptions, encrypted: bool, a: ConnArgs<'_>)
-where
+async fn serve_conn<S>(
+    stream: &mut S,
+    opts: &httpd::ServerOptions,
+    encrypted: bool,
+    a: ConnArgs<'_>,
+) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let _ = httpd::serve_connection(stream, opts, |req| {
@@ -755,9 +781,8 @@ fn dispatch_req(
     client_addr: std::net::IpAddr,
     encrypted: bool,
 ) -> Response {
-    let server_bin = std::path::Path::new(
-        cfg.files.server_bin.as_deref().unwrap_or("/usr/lib/cups"),
-    );
+    let server_bin =
+        std::path::Path::new(cfg.files.server_bin.as_deref().unwrap_or("/usr/lib/cups"));
     match req.method {
         Method::Get | Method::Head => cgi::dispatch(
             &req.uri,
@@ -900,7 +925,15 @@ fn ipp_dispatch(
         return Response::status(StatusCode::BAD_REQUEST);
     };
     let document = &req.body.as_bytes()[consumed..];
-    let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref(), subs.as_ref(), dnssd_state.as_ref());
+    let mut ctx = ops::Ctx::new(
+        registry,
+        cfg,
+        port,
+        jobs.as_ref(),
+        mime.as_ref(),
+        subs.as_ref(),
+        dnssd_state.as_ref(),
+    );
     ctx.is_local = local;
     ctx.is_encrypted = encrypted;
     // httpGetHostname: prefer the request's Host header for generated URIs.
