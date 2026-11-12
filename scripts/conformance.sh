@@ -59,8 +59,8 @@ UUID urn:uuid:00000000-0000-0000-0000-000000000001
 Info Test queue
 DeviceURI file://$PWROOT/out/print.out
 State Idle
-StateTime 1
-ConfigTime 1
+StateTime $(date +%s)
+ConfigTime $(date +%s)
 Type 4
 Accepting Yes
 Shared Yes
@@ -77,8 +77,8 @@ UUID urn:uuid:00000000-0000-0000-0000-000000000001
 Info Test queue
 DeviceURI file://$PWROOT/out/print.out
 State Idle
-StateTime 1
-ConfigTime 1
+StateTime $(date +%s)
+ConfigTime $(date +%s)
 Type 4
 Accepting Yes
 Shared Yes

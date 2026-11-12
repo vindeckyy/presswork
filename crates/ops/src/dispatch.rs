@@ -803,18 +803,27 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         None
     };
     let reg = ctx.reg();
+    // A root or collection `printer-uri` (`ipp://host/`, `/printers`,
+    // `/classes`, …) selects jobs across every printer — what `lpstat -t`
+    // and the IPP "all printers" semantic rely on.
+    let all_printers = !is_job_uri && is_all_printers_uri(&uri);
     // For `job-uri` the destination is the job's own printer; for
     // `printer-uri` the URI names it.
     let dest_for_validate = only_job
         .and_then(|id| jobs.get(id).map(|j| j.dest.clone()))
         .unwrap_or_else(|| uri.clone());
-    let Some((p, _)) = reg.validate_dest(&dest_for_validate) else {
-        send_status(
-            resp,
-            status::ERROR_NOT_FOUND,
-            "The printer or class does not exist.",
-        );
-        return;
+    let p_name = if all_printers {
+        None
+    } else {
+        let Some((p, _)) = reg.validate_dest(&dest_for_validate) else {
+            send_status(
+                resp,
+                status::ERROR_NOT_FOUND,
+                "The printer or class does not exist.",
+            );
+            return;
+        };
+        Some(p.name.clone())
     };
     let which = req
         .find(tags::OPERATION, "which-jobs")
@@ -842,7 +851,15 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
     // `job-id`+`job-uri`, not the full attribute set.
     let ra = requested_attrs(req).or_else(|| Some(vec!["job-id".into(), "job-uri".into()]));
     let mut emitted = 0;
-    for j in jobs.for_printer(&p.name) {
+    let candidate_jobs: Vec<&Job> = if all_printers {
+        reg.printers
+            .keys()
+            .flat_map(|name| jobs.for_printer(name))
+            .collect()
+    } else {
+        jobs.for_printer(p_name.as_deref().unwrap_or("")).collect()
+    };
+    for j in candidate_jobs {
         if only_job.is_some_and(|id| j.id != id) {
             continue;
         }
@@ -2569,6 +2586,18 @@ fn set_printer_attributes(
 }
 
 // ==================== P5: IPP subscriptions ====================
+
+/// True when a `printer-uri` names no single destination — the server root
+/// (`ipp://host/` or `ipp://host`) or a `/printers`/`/classes` collection.
+/// Such URIs mean "all printers" for ops like Get-Jobs / Get-Printers.
+fn is_all_printers_uri(uri: &str) -> bool {
+    let path = uri
+        .strip_prefix("ipp://")
+        .or_else(|| uri.strip_prefix("ipps://"))
+        .map_or(uri, |rest| rest.split('/').nth(1).map_or("", |s| s));
+    let path = path.trim_end_matches('/');
+    path.is_empty() || path == "printers" || path == "classes"
+}
 
 /// Printer/class name from a `printer-uri` — last `/printers|classes/` segment.
 fn dest_name(uri: &str) -> Option<String> {
