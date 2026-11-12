@@ -27,10 +27,9 @@ pub fn map_uri(uri: &str) -> Option<(&'static str, &str)> {
         (p, "jobs.cgi")
     } else if let Some(p) = path.strip_prefix("/printers") {
         (p, "printers.cgi")
-    } else if let Some(p) = path.strip_prefix("/help") {
-        (p, "help.cgi")
     } else {
-        return None;
+        let p = path.strip_prefix("/help")?;
+        (p, "help.cgi")
     };
     // Strip the leading '/' between the prefix and the remainder.
     let options = prefix.strip_prefix('/').unwrap_or(prefix);
@@ -48,6 +47,7 @@ pub fn cgi_root(server_bin: &Path) -> PathBuf {
 /// parsed: a `Status:` header sets the code, `Content-Type:` the type, and
 /// everything after the blank line is the body. A nonexistent/failed binary
 /// yields `None` so the caller can fall back to static files.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     server_bin: &Path,
     script: &str,
@@ -65,7 +65,7 @@ pub fn run(
     // `is_cgi`: QUERY_STRING is the part of the URI after the first `?`
     // (the `?` itself is stripped via `options ++`). `options` is the
     // prefix-remainder used for PATH_INFO + positional argv.
-    let query_string = req.uri.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let query_string = req.uri.split_once('?').map_or("", |(_, q)| q);
     let mut cmd = std::process::Command::new(&bin);
     cmd.env("GATEWAY_INTERFACE", "CGI/1.1")
         .env("SERVER_SOFTWARE", "CUPS/2.5")
@@ -145,7 +145,6 @@ fn parse_output(bytes: &[u8]) -> Response {
         let line = line.trim_end_matches('\r');
         if let Some(v) = line.strip_prefix("Status:") {
             status = v
-                .trim()
                 .split_whitespace()
                 .next()
                 .and_then(|n| n.parse().ok())

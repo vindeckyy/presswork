@@ -11,7 +11,7 @@
 //! daemon is TLS-ready without a CA. `SSLOptions` can later pin
 //! MinTLSVersion/ciphers.
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
@@ -25,6 +25,7 @@ pub struct ServerIdentity {
 impl ServerIdentity {
     /// Build a `rustls::ServerConfig` (no client auth — CUPS does IPP auth
     /// at the application layer).
+    #[must_use]
     pub fn server_config(&self) -> Arc<rustls::ServerConfig> {
         let cfg = rustls::ServerConfig::builder()
             .with_no_client_auth()
@@ -34,6 +35,7 @@ impl ServerIdentity {
     }
 
     /// A `tokio-rustls` acceptor for `SslListen`-style sockets.
+    #[must_use]
     pub fn acceptor(&self) -> TlsAcceptor {
         TlsAcceptor::from(self.server_config())
     }
@@ -65,27 +67,23 @@ fn create(dir: &Path, cn: &str) -> std::io::Result<ServerIdentity> {
     let cert = params.self_signed(&pair).map_err(to_io)?;
     let crt_pem = cert.pem();
     let key_pem = pair.serialize_pem();
-    let crt = dir.join("server.crt");
-    let key = dir.join("server.key");
-    std::fs::write(&crt, &crt_pem)?;
-    write_key(&key, &key_pem)?;
+    let crt_path = dir.join("server.crt");
+    let key_path = dir.join("server.key");
+    std::fs::write(&crt_path, &crt_pem)?;
+    write_key(&key_path, &key_pem)?;
     load(dir)
 }
 
 fn load(dir: &Path) -> std::io::Result<ServerIdentity> {
     let crt_pem = std::fs::read(dir.join("server.crt"))?;
     let key_pem = std::fs::read(dir.join("server.key"))?;
-    let certs = rustls_pemfile::certs(&mut &crt_pem[..])
+    use rustls::pki_types::pem::PemObject;
+    let certs = CertificateDer::pem_slice_iter(&crt_pem)
         .collect::<Result<Vec<_>, _>>()
         .map_err(to_io)?;
-    let key = rustls_pemfile::pkcs8_private_keys(&mut &key_pem[..])
-        .next()
-        .ok_or_else(|| io_err("no PKCS8 key in server.key"))?
-        .map_err(to_io)?;
-    Ok(ServerIdentity {
-        certs,
-        key: PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
-    })
+    let key = PrivateKeyDer::from_pem_slice(&key_pem)
+        .map_err(|_| io_err("no private key in server.key"))?;
+    Ok(ServerIdentity { certs, key })
 }
 
 #[cfg(unix)]
@@ -98,7 +96,6 @@ fn write_key(path: &Path, pem: &str) -> std::io::Result<()> {
         .mode(0o600)
         .open(path)?
         .write_all(pem.as_bytes())
-        .map_err(Into::into)
 }
 #[cfg(not(unix))]
 fn write_key(path: &Path, pem: &str) -> std::io::Result<()> {
@@ -106,6 +103,7 @@ fn write_key(path: &Path, pem: &str) -> std::io::Result<()> {
 }
 
 /// `ssl_dir` — `{ServerRoot}/ssl`.
+#[must_use]
 pub fn ssl_dir(server_root: &Path) -> PathBuf {
     server_root.join("ssl")
 }

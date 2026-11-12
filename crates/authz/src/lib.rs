@@ -28,6 +28,7 @@ pub struct Subject<'a> {
 
 /// `cupsdCheckAccess` on one `Location`: Order Deny,Allow / Allow,Deny over
 /// host masks, then `Require`/`Auth`/`Satisfy` user checks.
+#[must_use]
 pub fn permitted(loc: &Location, s: &Subject) -> bool {
     // Encryption requirement.
     if matches!(
@@ -102,7 +103,7 @@ fn require_check(loc: &Location, s: &Subject) -> bool {
             u if u == user => return true,
             _ => {}
         }
-        if n == &user {
+        if n == user {
             return true;
         }
     }
@@ -110,7 +111,8 @@ fn require_check(loc: &Location, s: &Subject) -> bool {
 }
 
 /// Find the policy op limit for `op` in `policy`, falling back to `All`.
-pub fn policy_op<'a>(policy: &'a Policy, op: u32) -> Option<&'a Location> {
+#[must_use]
+pub fn policy_op(policy: &Policy, op: u32) -> Option<&Location> {
     policy
         .ops
         .iter()
@@ -121,6 +123,7 @@ pub fn policy_op<'a>(policy: &'a Policy, op: u32) -> Option<&'a Location> {
 
 /// Evaluate an IPP op against a named policy in `policies`.
 /// `None` policy name → `default`. Missing policy → deny (fail closed).
+#[must_use]
 pub fn op_allowed(policies: &[Policy], policy_name: Option<&str>, op: u32, s: &Subject) -> bool {
     let name = policy_name.unwrap_or("default");
     let Some(pol) = policies.iter().find(|p| p.name == name) else {

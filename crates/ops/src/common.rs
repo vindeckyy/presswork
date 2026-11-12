@@ -1,6 +1,17 @@
 //! Shared response-construction helpers — ports of `ippNewResponse`,
 //! `send_ipp_status`, `copy_printer_attrs`, `create_requested_array`,
 //! and the `CommonData` attribute block from `cupsdCreateCommonData`.
+//!
+//! Same rationale as `dispatch`: intentional `i64`/`usize`→`i32` IPP-int
+//! downcasts (bounded by the model), `&Option` helper params kept for the
+//! shared call sites, and table-sized fns — allowed module-wide.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    clippy::ref_option
+)]
 
 use ipp_codec::{tags, Attribute, IppMessage, Value};
 use printer::{ipp_datetime, now, ptype, state_reasons_attr, Printer};
@@ -519,8 +530,10 @@ fn stored_attrs(p: &Printer, _ctx: &Ctx) -> Vec<Attribute> {
         .options
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case("printer-device-id"))
-        .map(|(_, v)| v.clone())
-        .unwrap_or_else(|| "MFG:presswork;MDL:ipp-everywhere;CMD:PWG-Raster;".into());
+        .map_or_else(
+            || "MFG:presswork;MDL:ipp-everywhere;CMD:PWG-Raster;".into(),
+            |(_, v)| v.clone(),
+        );
     add1(
         &mut v,
         "printer-device-id",

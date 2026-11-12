@@ -27,20 +27,19 @@ fn main() {
                 Some((h, p)) => (h.to_string(), p.parse().unwrap_or(9100)),
                 None => (hostport.to_string(), 9100),
             };
-            let addr = match format!("{host}:{port}").parse() {
-                Ok(a) => a,
-                Err(_) => {
-                    // resolve hostname
-                    use std::net::ToSocketAddrs;
-                    match format!("{host}:{port}")
-                        .to_socket_addrs()
-                        .and_then(|mut i| i.next().ok_or_else(|| std::io::Error::other("no addr")))
-                    {
-                        Ok(a) => a,
-                        Err(e) => {
-                            bc::error(format_args!("Cannot resolve {host}: {e}"));
-                            return bc::code::FAILED;
-                        }
+            let addr = if let Ok(a) = format!("{host}:{port}").parse() {
+                a
+            } else {
+                // resolve hostname
+                use std::net::ToSocketAddrs;
+                match format!("{host}:{port}")
+                    .to_socket_addrs()
+                    .and_then(|mut i| i.next().ok_or_else(|| std::io::Error::other("no addr")))
+                {
+                    Ok(a) => a,
+                    Err(e) => {
+                        bc::error(format_args!("Cannot resolve {host}: {e}"));
+                        return bc::code::FAILED;
                     }
                 }
             };

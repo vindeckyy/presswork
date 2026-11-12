@@ -147,9 +147,7 @@ impl Response {
             }
             out.extend_from_slice(format!("{n}: {v}\r\n").as_bytes());
         }
-        if !saw_len && !head_only {
-            out.extend_from_slice(format!("Content-Length: {}\r\n", self.body.len()).as_bytes());
-        } else if head_only && !saw_len {
+        if !saw_len {
             out.extend_from_slice(format!("Content-Length: {}\r\n", self.body.len()).as_bytes());
         }
         if !saw_conn && !keep_alive {

@@ -206,6 +206,7 @@ fn lookup(table: &[(&str, VarType)], name: &str) -> Option<VarType> {
 }
 
 /// The coercion switch — mirrors `parse_variable`'s `switch (var->type)`.
+#[allow(clippy::too_many_lines)]
 fn coerce<D: Diag>(
     name: &str,
     ty: VarType,
@@ -269,6 +270,7 @@ fn coerce<D: Diag>(
                     return Err(());
                 }
             }
+            #[allow(clippy::cast_precision_loss)] // loose range sanity bound
             if !(0.0..=(i64::MAX as f64)).contains(&n) {
                 lerr("Bad size value");
                 return Err(());
@@ -392,7 +394,7 @@ fn apply_cupsd(c: &mut CupsdConfig, name: &str, v: Typed) {
     macro_rules! i32f {
         ($f:expr) => {
             if let Typed::Int(n) | Typed::Time(n) = v {
-                $f = n as i32;
+                $f = i32::try_from(n).unwrap_or(i32::MAX);
             }
         };
     }

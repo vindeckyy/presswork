@@ -3,7 +3,7 @@
 //!
 //! Basic auth decodes `Authorization: Basic base64(user:pass)` and verifies
 //! against the local password database via `sys::check_password` (shadow
-//! `crypt`), matching cupsd's PAM-backed BasicAuth semantics.
+//! `crypt`), matching cupsd's PAM-backed `BasicAuth` semantics.
 
 use base64::Engine;
 use std::fmt::Write as _;
@@ -20,6 +20,7 @@ pub struct Credentials {
 }
 
 /// Parse an `Authorization` header value.
+#[must_use]
 pub fn parse(header: &str) -> Option<Credentials> {
     let (scheme, rest) = header.split_once(' ')?;
     if scheme.eq_ignore_ascii_case("basic") {
@@ -45,6 +46,7 @@ pub fn parse(header: &str) -> Option<Credentials> {
 
 /// Verify credentials and return the authenticated username + groups.
 /// `Basic` → `sys::check_password`; other schemes → `None` (P4 = Basic only).
+#[must_use]
 pub fn authenticate(creds: &Credentials) -> Option<(String, Vec<String>)> {
     if !creds.scheme.eq_ignore_ascii_case("basic") {
         return None;
@@ -56,6 +58,7 @@ pub fn authenticate(creds: &Credentials) -> Option<(String, Vec<String>)> {
 }
 
 /// `Basic realm="…"` challenge for a 401 response.
+#[must_use]
 pub fn basic_challenge(realm: &str) -> String {
     let mut s = String::new();
     let _ = write!(s, "Basic realm=\"{realm}\"");

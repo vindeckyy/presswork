@@ -328,6 +328,7 @@ impl Default for BrowseProtocols {
 
 /// TLS option flags + min/max protocol version (`SSLOptions`).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // TLS option bits mirror upstream _HTTP_TLS_* flags
 pub struct TlsOptions {
     /// Option bits (`_HTTP_TLS_*`): `allow_rc4`, `allow_dh`, `deny_cbc`,
     /// `no_system`, `no_empty_fragments`.

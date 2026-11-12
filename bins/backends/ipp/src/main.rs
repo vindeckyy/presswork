@@ -22,10 +22,9 @@ struct Target {
 fn parse_uri(uri: &str) -> Option<Target> {
     let (tls, rest) = if let Some(r) = uri.strip_prefix("ipps://") {
         (true, r)
-    } else if let Some(r) = uri.strip_prefix("ipp://") {
-        (false, r)
     } else {
-        return None;
+        let r = uri.strip_prefix("ipp://")?;
+        (false, r)
     };
     let (authority, resource) = match rest.split_once('/') {
         Some((a, p)) => (a, format!("/{p}")),
@@ -110,12 +109,9 @@ fn main() {
 }
 
 fn print(_argv: &[String], inv: &backend_common::Invocation) -> i32 {
-    let target = match parse_uri(&inv.device_uri) {
-        Some(t) => t,
-        None => {
-            backend_common::error(format_args!("ipp: bad device-uri {}", inv.device_uri));
-            return backend_common::code::FAILED;
-        }
+    let Some(target) = parse_uri(&inv.device_uri) else {
+        backend_common::error(format_args!("ipp: bad device-uri {}", inv.device_uri));
+        return backend_common::code::FAILED;
     };
     if target.tls {
         backend_common::error(format_args!(

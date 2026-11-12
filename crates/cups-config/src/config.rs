@@ -71,6 +71,7 @@ impl Diag for DiagSink<'_> {
 
 /// Everything parsed from `cupsd.conf` (upstream globals in conf.c).
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)] // flat config surface mirrors upstream cupsd
 pub struct CupsdConfig {
     // Listeners
     /// `Listen`/`Port`/`SSLListen`/`SSLPort` accumulated addresses.
@@ -538,7 +539,7 @@ static PROHIBITED_ENV: &[&str] = &[
 /// Parse `cups-files.conf` — port of `read_cups_files_conf`.
 ///
 /// `resolve_user`/`resolve_group` resolve names→ids; tests inject fakes.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn read_cups_files_conf<R: BufRead>(
     r: R,
     filename: &str,
@@ -601,7 +602,7 @@ pub fn read_cups_files_conf<R: BufRead>(
             }
             *fatal = f;
         } else if name.eq_ignore_ascii_case("FileDevice") && value.is_some() {
-            let v = value.unwrap();
+            let v = value.unwrap_or("");
             if matches!(v.to_ascii_lowercase().as_str(), "false" | "no" | "off") {
                 cfg.file_device = None;
             } else {
@@ -624,7 +625,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 cfg.file_device = Some(pat);
             }
         } else if name.eq_ignore_ascii_case("Group") && value.is_some() {
-            let v = value.unwrap();
+            let v = value.unwrap_or("");
             if v.as_bytes().first().is_some_and(u8::is_ascii_digit) {
                 cfg.group = v.parse().unwrap_or(cfg.group);
             } else if let Some(gid) = resolve_group(v) {
@@ -640,7 +641,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 fatal_if!(FatalErrors::CONFIG);
             }
         } else if name.eq_ignore_ascii_case("LogFileGroup") && value.is_some() {
-            let v = value.unwrap();
+            let v = value.unwrap_or("");
             if v.as_bytes().first().is_some_and(u8::is_ascii_digit) {
                 cfg.log_file_group = v.parse().ok();
             } else if let Some(gid) = resolve_group(v) {
@@ -656,7 +657,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 fatal_if!(FatalErrors::CONFIG);
             }
         } else if name.eq_ignore_ascii_case("OAuthGroup") && value.is_some() {
-            let v = value.unwrap();
+            let v = value.unwrap_or("");
             let mut parts = v.splitn(2, char::is_whitespace);
             let gname = parts.next().unwrap_or("");
             let file = parts.next().unwrap_or("").trim_start();
@@ -699,7 +700,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 }
             }
         } else if name.eq_ignore_ascii_case("PeerCred") && value.is_some() {
-            match value.unwrap().to_ascii_lowercase().as_str() {
+            match value.unwrap_or("").to_ascii_lowercase().as_str() {
                 "off" => cfg.peer_cred = PeerCred::Off,
                 "on" => cfg.peer_cred = PeerCred::On,
                 "root-only" => cfg.peer_cred = PeerCred::RootOnly,
@@ -715,7 +716,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 }
             }
         } else if name.eq_ignore_ascii_case("PrintcapFormat") && value.is_some() {
-            match value.unwrap().to_ascii_lowercase().as_str() {
+            match value.unwrap_or("").to_ascii_lowercase().as_str() {
                 "bsd" => cfg.printcap_format = PrintcapFormat::Bsd,
                 "plist" => cfg.printcap_format = PrintcapFormat::Plist,
                 "solaris" => cfg.printcap_format = PrintcapFormat::Solaris,
@@ -731,7 +732,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 }
             }
         } else if name.eq_ignore_ascii_case("Sandboxing") && value.is_some() {
-            match value.unwrap().to_ascii_lowercase().as_str() {
+            match value.unwrap_or("").to_ascii_lowercase().as_str() {
                 "off" => cfg.sandboxing = Sandboxing::Off,
                 "relaxed" => cfg.sandboxing = Sandboxing::Relaxed,
                 "strict" => cfg.sandboxing = Sandboxing::Strict,
@@ -747,7 +748,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 }
             }
         } else if name.eq_ignore_ascii_case("SetEnv") && value.is_some() {
-            let v = value.unwrap();
+            let v = value.unwrap_or("");
             let mut parts = v.splitn(2, char::is_whitespace);
             let var = parts.next().unwrap_or("");
             let val = parts.next().map_or("", str::trim_start);
@@ -771,7 +772,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 cfg.set_env.push((var.to_string(), val.to_string()));
             }
         } else if name.eq_ignore_ascii_case("SystemGroup") && value.is_some() {
-            for gname in split_groups(value.unwrap()) {
+            for gname in split_groups(value.unwrap_or("")) {
                 if let Some(gid) = resolve_group(&gname) {
                     cfg.system_groups.push(gid);
                     cfg.system_group_names.push(gname);
@@ -787,7 +788,7 @@ pub fn read_cups_files_conf<R: BufRead>(
                 }
             }
         } else if name.eq_ignore_ascii_case("User") && value.is_some() {
-            let v = value.unwrap();
+            let v = value.unwrap_or("");
             if v.as_bytes().first().is_some_and(u8::is_ascii_digit) {
                 let uid: u32 = v.parse().unwrap_or(u32::MAX);
                 if uid == 0 {
@@ -868,6 +869,36 @@ pub fn read_cupsd_conf<R: BufRead>(
     cfg: &mut CupsdConfig,
     diags: &mut Diagnostics,
 ) -> bool {
+    /// Directives that belong in cups-files.conf — warn when found here.
+    const MOVED: &[&str] = &[
+        "AccessLog",
+        "CacheDir",
+        "ConfigFilePerm",
+        "DataDir",
+        "DocumentRoot",
+        "ErrorLog",
+        "FatalErrors",
+        "FileDevice",
+        "Group",
+        "LogFilePerm",
+        "PageLog",
+        "PassEnv",
+        "Printcap",
+        "PrintcapFormat",
+        "RemoteRoot",
+        "RequestRoot",
+        "ServerBin",
+        "ServerCertificate",
+        "ServerKey",
+        "ServerKeychain",
+        "ServerRoot",
+        "SetEnv",
+        "StateDir",
+        "SystemGroup",
+        "SystemGroupAuthKey",
+        "TempDir",
+        "User",
+    ];
     let mut lines = ConfLines::new(r);
     let fatal = cfg.fatal_errors;
 
@@ -908,37 +939,6 @@ pub fn read_cupsd_conf<R: BufRead>(
             }
         };
     }
-
-    /// Directives that belong in cups-files.conf — warn when found here.
-    const MOVED: &[&str] = &[
-        "AccessLog",
-        "CacheDir",
-        "ConfigFilePerm",
-        "DataDir",
-        "DocumentRoot",
-        "ErrorLog",
-        "FatalErrors",
-        "FileDevice",
-        "Group",
-        "LogFilePerm",
-        "PageLog",
-        "PassEnv",
-        "Printcap",
-        "PrintcapFormat",
-        "RemoteRoot",
-        "RequestRoot",
-        "ServerBin",
-        "ServerCertificate",
-        "ServerKey",
-        "ServerKeychain",
-        "ServerRoot",
-        "SetEnv",
-        "StateDir",
-        "SystemGroup",
-        "SystemGroupAuthKey",
-        "TempDir",
-        "User",
-    ];
 
     while let Some(line) = lines.next() {
         let line = match line {
@@ -1024,7 +1024,7 @@ pub fn read_cupsd_conf<R: BufRead>(
                 None
             };
             if let Some(t) = t {
-                cfg.default_auth_type = t
+                cfg.default_auth_type = t;
             } else {
                 warn!(
                     ln,
@@ -1163,7 +1163,9 @@ pub fn read_cupsd_conf<R: BufRead>(
             }
         } else if name.eq_ignore_ascii_case("FilterNice") && line.value.is_some() {
             match line.value.as_deref().unwrap().parse::<i64>() {
-                Ok(n) if (0..=19).contains(&n) => cfg.filter_nice = n as i32,
+                Ok(n) if (0..=19).contains(&n) => {
+                    cfg.filter_nice = i32::try_from(n).unwrap_or(19);
+                }
                 _ => {
                     warn!(ln, "The directive FilterNice accepts values 0 to 19.");
                     fatal_cfg!();
@@ -1214,6 +1216,8 @@ fn parse_ssl_options(
         return;
     };
     for w in v.split_whitespace() {
+        // distinct directives can legitimately map to the same field
+        #[allow(clippy::match_same_arms)]
         match w.to_ascii_lowercase().as_str() {
             "allowrc4" => opts.allow_rc4 = true,
             "allowssl3" => opts.min_version = TlsVersion::Ssl3,
@@ -1356,6 +1360,7 @@ fn split_host_port(value: &str, defport: u16) -> (Option<String>, u16) {
 
 /// `read_location()` — parse `<Location path>…</Location>` incl.
 /// `<Limit>`/`<LimitExcept>` child copies. Returns false on fatal error.
+#[allow(clippy::too_many_lines)]
 fn read_location<R: BufRead>(
     lines: &mut ConfLines<R>,
     cfg: &mut CupsdConfig,
@@ -1506,6 +1511,7 @@ fn read_location<R: BufRead>(
 }
 
 /// `read_policy()` — parse `<Policy name>…</Policy>`.
+#[allow(clippy::too_many_lines)]
 fn read_policy<R: BufRead>(
     lines: &mut ConfLines<R>,
     cfg: &mut CupsdConfig,
@@ -1743,6 +1749,7 @@ fn read_policy<R: BufRead>(
 /// Build the synthesized "default" policy cupsd creates when the config
 /// defines none (port of the block at conf.c ~1441-1615).
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn default_policy() -> Policy {
     use ipp_codec::ops::op as ops;
 

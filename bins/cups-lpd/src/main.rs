@@ -71,7 +71,7 @@ fn session(inp: &mut impl Read, out: &mut impl Write) -> std::process::ExitCode 
         return std::process::ExitCode::FAILURE;
     }
     match cmd[0] {
-        0x01 => {} // print any waiting jobs — scheduler runs continuously
+        // 0x01 (print waiting jobs) is a no-op — the scheduler runs continuously.
         0x02 => receive_job(inp, out),
         0x03 | 0x04 => queue_state(out, cmd[0] == 0x04),
         0x05 => remove_jobs(inp, out),
@@ -117,16 +117,13 @@ fn receive_job(inp: &mut impl Read, out: &mut impl Write) {
             return;
         }
         match sub[0] {
-            0x01 => return, // abort
             0x02 | 0x03 => {
                 // "<size> SP <name>"
-                let hdr = match read_line(inp) {
-                    Some(h) => h,
-                    None => return,
+                let Some(hdr) = read_line(inp) else {
+                    return;
                 };
-                let size: usize = match hdr.split(' ').next().and_then(|n| n.parse().ok()) {
-                    Some(n) => n,
-                    None => return,
+                let Some(size) = hdr.split(' ').next().and_then(|n| n.parse::<usize>().ok()) else {
+                    return;
                 };
                 ack(out);
                 let mut buf = vec![0u8; size];

@@ -3,6 +3,7 @@
 //! Jobs live under `RequestRoot` (default `/var/spool/cups`):
 //!   - `d%05d-%03d` — document data files (e.g. `d00012-001`)
 //!   - `c%05d`      — IPP-serialized job-attribute control file
+//!
 //! The control file stores the job's `ipp_t` attribute set (written by
 //! `cupsdSaveJob`/`cupsdLoadAllJobs`), so a restart resumes queue state.
 
@@ -27,6 +28,7 @@ pub enum JobState {
 }
 
 impl JobState {
+    #[must_use]
     pub fn from_i32(v: i32) -> Option<Self> {
         Some(match v {
             3 => Self::Pending,
@@ -40,9 +42,11 @@ impl JobState {
         })
     }
     /// Whether the job is finished.
+    #[must_use]
     pub fn is_final(self) -> bool {
         matches!(self, Self::Canceled | Self::Aborted | Self::Completed)
     }
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -120,10 +124,12 @@ impl Job {
     }
 
     /// Control-file path: `RequestRoot/c%05d`.
+    #[must_use]
     pub fn control_path(root: &Path, id: i32) -> PathBuf {
         root.join(format!("c{id:05}"))
     }
     /// Data-file path: `RequestRoot/d%05d-%03d`.
+    #[must_use]
     pub fn data_path(root: &Path, id: i32, num: u32) -> PathBuf {
         root.join(format!("d{id:05}-{num:03}"))
     }
@@ -133,7 +139,7 @@ impl Job {
         let mut msg = IppMessage::new(ipp_codec::ops::op::PRINT_JOB);
         msg.request_id = self.id;
         let g = msg.group_mut(tags::JOB);
-        g.attributes = self.attrs.clone();
+        g.attributes.clone_from(&self.attrs);
 
         // Bookkeeping attrs live in the same set so a restart rebuilds the
         // job verbatim.
@@ -187,14 +193,14 @@ impl Job {
             &mut msg,
             "time-at-creation",
             tags::INTEGER,
-            Value::Integer(self.created_at as i32),
+            Value::Integer(i32::try_from(self.created_at).unwrap_or(i32::MAX)),
         );
         if let Some(t) = self.processing_at {
             upsert(
                 &mut msg,
                 "time-at-processing",
                 tags::INTEGER,
-                Value::Integer(t as i32),
+                Value::Integer(i32::try_from(t).unwrap_or(i32::MAX)),
             );
         }
         if let Some(t) = self.completed_at {
@@ -202,7 +208,7 @@ impl Job {
                 &mut msg,
                 "time-at-completed",
                 tags::INTEGER,
-                Value::Integer(t as i32),
+                Value::Integer(i32::try_from(t).unwrap_or(i32::MAX)),
             );
         }
         upsert_n(
@@ -257,7 +263,7 @@ impl Job {
             .iter()
             .enumerate()
             .map(|(i, v)| JobFile {
-                num: i as u32 + 1,
+                num: u32::try_from(i).unwrap_or(0) + 1,
                 filetype: match v {
                     Value::Text(t) => t.to_string(),
                     _ => "?".into(),
@@ -280,7 +286,7 @@ impl Job {
                 .map(|g| g.attributes.clone())
                 .unwrap_or_default(),
             files,
-            created_at: i64::from(get_i("time-at-creation").unwrap_or_else(|| now() as i32)),
+            created_at: get_i("time-at-creation").map_or_else(now, i64::from),
             processing_at: get_i("time-at-processing").map(i64::from),
             completed_at: get_i("time-at-completed").map(i64::from),
             backend_pid: None,
@@ -300,6 +306,7 @@ pub struct Jobs {
 
 impl Jobs {
     /// Scan `RequestRoot` for `cNNNNN` files and rebuild the table.
+    #[must_use]
     pub fn load_all(root: &Path) -> Self {
         let mut j = Jobs::default();
         let Ok(rd) = fs::read_dir(root) else { return j };
@@ -354,6 +361,7 @@ impl Jobs {
         Ok(())
     }
 
+    #[must_use]
     pub fn get(&self, id: i32) -> Option<&Job> {
         self.by_id.get(&id)
     }
@@ -374,6 +382,7 @@ impl Jobs {
         self.by_id.values_mut()
     }
     /// Every job id currently tracked.
+    #[must_use]
     pub fn ids(&self) -> Vec<i32> {
         self.by_id.keys().copied().collect()
     }
@@ -416,9 +425,9 @@ fn upsert_n(msg: &mut IppMessage, name: &str, tag: u8, vs: Vec<Value>) {
     }
 }
 
+#[must_use]
 pub fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }

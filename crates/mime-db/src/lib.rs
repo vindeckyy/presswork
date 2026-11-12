@@ -61,7 +61,7 @@ pub enum Join {
 pub struct Group(pub Vec<(Join, Rule)>);
 
 /// A full recognition expression: operands + joiners, evaluated
-/// left-to-right (`a b + c` = `(a || b) && c`, matching mime_checkrules).
+/// left-to-right (`a b + c` = `(a || b) && c`, matching `mime_checkrules`).
 pub type Expr = Vec<(Join, Rule)>;
 
 /// One recognized MIME type (`mime_type_t`).
@@ -79,6 +79,7 @@ pub struct Type {
 
 impl Type {
     /// `application/pdf`-style display name.
+    #[must_use]
     pub fn name(&self) -> String {
         format!("{}/{}", self.sup, self.typ)
     }
@@ -200,6 +201,7 @@ impl MimeDb {
 
     /// Detect a file's MIME type from its name + first `head` bytes
     /// (`mimeFileType`). Returns `None` for unrecognized.
+    #[must_use]
     pub fn detect(&self, filename: &str, head: &[u8]) -> Option<&Type> {
         self.types
             .iter()
@@ -207,6 +209,7 @@ impl MimeDb {
     }
 
     /// Look up a type by `super/type` name.
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&Type> {
         let (s, t) = name.split_once('/')?;
         self.types
@@ -216,6 +219,7 @@ impl MimeDb {
 
     /// Minimum-cost filter chain src→dst (`mimeFilter2` — Dijkstra over the
     /// conv graph). Returns the ordered conv steps; empty = direct.
+    #[must_use]
     pub fn filter_chain(&self, src: &str, dst: &str, max_cost: u32) -> Option<Vec<&Conv>> {
         use std::cmp::Reverse;
         use std::collections::BinaryHeap;
@@ -224,16 +228,16 @@ impl MimeDb {
         if src == dst {
             return Some(vec![]);
         }
-        // dist[type] = (cost, path)
-        let mut dist: HashMap<String, (u32, Vec<&Conv>)> = HashMap::new();
+        // best[type] = (cost, path)
+        let mut best: HashMap<String, (u32, Vec<&Conv>)> = HashMap::new();
         let mut heap = BinaryHeap::new();
-        dist.insert(src.clone(), (0, vec![]));
+        best.insert(src.clone(), (0, vec![]));
         heap.push(Reverse((0u32, src.clone())));
         while let Some(Reverse((cost, cur))) = heap.pop() {
             if cur == dst {
-                return Some(dist[&dst].1.clone());
+                return Some(best[&dst].1.clone());
             }
-            if dist.get(&cur).is_some_and(|(d, _)| cost > *d) {
+            if best.get(&cur).is_some_and(|(d, _)| cost > *d) {
                 continue;
             }
             for c in self
@@ -245,11 +249,11 @@ impl MimeDb {
                 if ncost > max_cost && max_cost != 0 {
                     continue;
                 }
-                let better = dist.get(&c.dst).is_none_or(|(d, _)| ncost < *d);
+                let better = best.get(&c.dst).map_or(true, |(d, _)| ncost < *d);
                 if better {
-                    let mut path = dist[&cur].1.clone();
+                    let mut path = best[&cur].1.clone();
                     path.push(c);
-                    dist.insert(c.dst.clone(), (ncost, path));
+                    best.insert(c.dst.clone(), (ncost, path));
                     heap.push(Reverse((ncost, c.dst.clone())));
                 }
             }
@@ -258,6 +262,7 @@ impl MimeDb {
     }
 
     /// Does `dst` accept `src` directly or via convs (for `file_ready` checks)?
+    #[must_use]
     pub fn can_convert(&self, src: &str, dst: &str) -> bool {
         src.eq_ignore_ascii_case(dst)
             || self.filter_chain(src, dst, 0).is_some_and(|_| true)
@@ -267,7 +272,7 @@ impl MimeDb {
 
 fn sorted_ext(dir: &Path, ext: &str) -> std::io::Result<Vec<std::path::PathBuf>> {
     let mut v: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|e| e == ext))
         .collect();
@@ -298,48 +303,48 @@ fn logical_lines<R: BufRead>(r: R) -> impl Iterator<Item = String> {
 // ---------- rule parsing ----------
 
 fn parse_rules(s: &str) -> (Expr, i32) {
-    // Recursive-descent fold: expr := operand (join operand)* where the
-    // joiner is `+` (And) or `,`/whitespace (Or). Whitespace around `+` is
-    // part of the And join — matching mime_checkrules' left-associative
-    // evaluation (`a b + c` = `(a || b) && c`).
-    let b = s.as_bytes();
-    let mut i = 0usize;
-    let mut expr: Expr = Vec::new();
-    let mut pending_and = false;
-    let mut priority = 100;
-
     fn skip_ws(b: &[u8], i: &mut usize) {
         while *i < b.len() && (b[*i] as char).is_whitespace() {
             *i += 1;
         }
     }
 
-    skip_ws(b, &mut i);
-    while i < b.len() {
+    // Recursive-descent fold: expr := operand (join operand)* where the
+    // joiner is `+` (And) or `,`/whitespace (Or). Whitespace around `+` is
+    // part of the And join — matching mime_checkrules' left-associative
+    // evaluation (`a b + c` = `(a || b) && c`).
+    let buf = s.as_bytes();
+    let mut pos = 0usize;
+    let mut expr: Expr = Vec::new();
+    let mut pending_and = false;
+    let mut priority = 100;
+
+    skip_ws(buf, &mut pos);
+    while pos < buf.len() {
         // Parse one operand.
-        let r: Rule;
-        if b[i] == b'(' {
+        let rule: Rule;
+        if buf[pos] == b'(' {
             let mut depth = 1;
-            let mut j = i + 1;
+            let mut k = pos + 1;
             let mut inq = false;
-            while j < b.len() && depth > 0 {
-                match b[j] as char {
+            while k < buf.len() && depth > 0 {
+                match buf[k] as char {
                     '"' => inq = !inq,
                     '(' if !inq => depth += 1,
                     ')' if !inq => depth -= 1,
                     _ => {}
                 }
-                j += 1;
+                k += 1;
             }
-            let (inner, _) = parse_rules(&s[i + 1..j.saturating_sub(1)]);
-            r = Rule::Group { expr: inner };
-            i = j;
+            let (inner, _) = parse_rules(&s[pos + 1..k.saturating_sub(1)]);
+            rule = Rule::Group { expr: inner };
+            pos = k;
         } else {
-            let mut j = i;
+            let mut k = pos;
             let mut depth = 0;
             let mut inq = false;
-            while j < b.len() {
-                let ch = b[j] as char;
+            while k < buf.len() {
+                let ch = buf[k] as char;
                 match ch {
                     '"' => inq = !inq,
                     '(' if !inq => depth += 1,
@@ -352,44 +357,41 @@ fn parse_rules(s: &str) -> (Expr, i32) {
                     '+' | ' ' | '\t' | ',' if depth == 0 && !inq => break,
                     _ => {}
                 }
-                j += 1;
+                k += 1;
             }
-            match parse_rule(&s[i..j]) {
-                Some(parsed) => r = parsed,
-                None => {
-                    i = j.max(i + 1);
-                    skip_ws(b, &mut i);
-                    continue;
-                }
+            if let Some(parsed) = parse_rule(&s[pos..k]) {
+                rule = parsed;
+            } else {
+                pos = k.max(pos + 1);
+                skip_ws(buf, &mut pos);
+                continue;
             }
-            i = j;
+            pos = k;
         }
 
-        if let Rule::Priority { n } = r {
+        if let Rule::Priority { n } = rule {
             priority = n;
-            skip_ws(b, &mut i);
+            skip_ws(buf, &mut pos);
             pending_and = false;
-            if i < b.len() && b[i] == b'+' {
-                i += 1;
-            } else if i < b.len() && b[i] == b',' {
-                i += 1;
+            if pos < buf.len() && (buf[pos] == b'+' || buf[pos] == b',') {
+                pos += 1;
             }
-            skip_ws(b, &mut i);
+            skip_ws(buf, &mut pos);
             continue;
         }
         let join = if pending_and { Join::And } else { Join::Or };
-        expr.push((join, r));
+        expr.push((join, rule));
 
         // Consume the joiner: whitespace, then optional `+` (And) or `,` (Or).
-        skip_ws(b, &mut i);
+        skip_ws(buf, &mut pos);
         pending_and = false;
-        if i < b.len() && b[i] == b'+' {
+        if pos < buf.len() && buf[pos] == b'+' {
             pending_and = true;
-            i += 1;
-        } else if i < b.len() && b[i] == b',' {
-            i += 1;
+            pos += 1;
+        } else if pos < buf.len() && buf[pos] == b',' {
+            pos += 1;
         }
-        skip_ws(b, &mut i);
+        skip_ws(buf, &mut pos);
     }
     (expr, priority)
 }
@@ -398,10 +400,10 @@ fn parse_rule(t: &str) -> Option<Rule> {
     // `fn(a, b, "c")` or bare extension/match.
     if let Some(open) = t.find('(') {
         let name = &t[..open];
-        let args = t[open + 1..].trim_end_matches(')');
-        let mut a = args.splitn(2, ',');
-        let arg1 = a.next().unwrap_or("").trim();
-        let arg2 = a.next().unwrap_or("").trim();
+        let argstr = t[open + 1..].trim_end_matches(')');
+        let mut parts = argstr.splitn(2, ',');
+        let arg1 = parts.next().unwrap_or("").trim();
+        let arg2 = parts.next().unwrap_or("").trim();
         match name {
             "string" => {
                 return Some(Rule::Str {
@@ -418,38 +420,38 @@ fn parse_rule(t: &str) -> Option<Rule> {
             "char" => {
                 return Some(Rule::Char {
                     offset: num(arg1),
-                    v: num(arg2) as u8,
+                    v: u8::try_from(num(arg2)).unwrap_or_default(),
                 })
             }
             "short" => {
                 return Some(Rule::Short {
                     offset: num(arg1),
-                    v: num(arg2) as u16,
+                    v: u16::try_from(num(arg2)).unwrap_or_default(),
                 })
             }
             "int" => {
                 return Some(Rule::Int {
                     offset: num(arg1),
-                    v: num(arg2) as u32,
+                    v: u32::try_from(num(arg2)).unwrap_or_default(),
                 })
             }
             "ascii" => {
                 return Some(Rule::Ascii {
                     offset: num(arg1),
-                    len: num(arg2) as usize,
+                    len: usize::try_from(num(arg2)).unwrap_or_default(),
                 })
             }
             "printable" => {
                 return Some(Rule::Printable {
                     offset: num(arg1),
-                    len: num(arg2) as usize,
+                    len: usize::try_from(num(arg2)).unwrap_or_default(),
                 })
             }
             "contains" => {
                 let mut a2 = arg2.splitn(2, ',');
                 return Some(Rule::Contains {
                     offset: num(arg1),
-                    range: num(a2.next().unwrap_or("0")) as usize,
+                    range: usize::try_from(num(a2.next().unwrap_or("0"))).unwrap_or_default(),
                     lit: lit(a2.next().unwrap_or("")),
                 });
             }
@@ -471,7 +473,7 @@ fn parse_rule(t: &str) -> Option<Rule> {
             }
             "priority" => {
                 return Some(Rule::Priority {
-                    n: num(arg1) as i32,
+                    n: i32::try_from(num(arg1)).unwrap_or_default(),
                 })
             }
             "true" => return Some(Rule::Char { offset: 0, v: 0 }), // never true; handled below
@@ -607,11 +609,12 @@ fn eval_rule(r: &Rule, filename: &str, head: &[u8]) -> bool {
 
 fn get(head: &[u8], offset: i64, len: usize) -> &[u8] {
     if offset < 0 {
-        let o = head.len().saturating_sub((-offset) as usize);
-        return head.get(o..o + len).unwrap_or(&[]);
+        let neg = usize::try_from(-offset).unwrap_or(usize::MAX);
+        let o = head.len().saturating_sub(neg);
+        return head.get(o..o.saturating_add(len)).unwrap_or(&[]);
     }
-    head.get(offset as usize..(offset as usize).saturating_add(len))
-        .unwrap_or(&[])
+    let off = usize::try_from(offset).unwrap_or(usize::MAX);
+    head.get(off..off.saturating_add(len)).unwrap_or(&[])
 }
 
 /// Minimal ERE subset for `regex()` — `^` anchor + literal/`[]`/`.`/`()`/`*`

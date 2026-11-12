@@ -67,11 +67,15 @@ pub fn name_of_uid(uid: u32) -> Option<String> {
 }
 
 /// Group names a user belongs to (`getgrouplist` + `getgrgid`).
+#[must_use]
 pub fn groups_of(user: &str) -> Vec<String> {
     use std::ffi::CString;
     let Some(c) = CString::new(user).ok() else {
         return Vec::new();
     };
+    // SAFETY: `c` is a valid NUL-terminated CString; the returned `pw` is a
+    // static getpwnam buffer read before any subsequent libc call that could
+    // clobber it; `gids` is a live buffer of `n` elements for getgrouplist.
     unsafe {
         let pw = libc::getpwnam(c.as_ptr());
         if pw.is_null() {
@@ -83,12 +87,12 @@ pub fn groups_of(user: &str) -> Vec<String> {
         if n <= 0 {
             n = 16;
         }
-        let mut gids = vec![0u32; n as usize];
+        let mut gids = vec![0u32; usize::try_from(n).unwrap_or(0)];
         let mut got = n;
         if libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, gids.as_mut_ptr(), &mut got) < 0 {
             return Vec::new();
         }
-        gids.truncate(got.max(0) as usize);
+        gids.truncate(usize::try_from(got.max(0)).unwrap_or(0));
         gids.iter()
             .filter_map(|&gid| {
                 let g = libc::getgrgid(gid);
@@ -108,19 +112,23 @@ pub fn groups_of(user: &str) -> Vec<String> {
 
 /// Verify a local password against the shadow entry (`getspnam`+`crypt`).
 /// Returns `false` for unknown users or when shadow is unreadable (non-root).
+#[must_use]
 pub fn check_password(user: &str, pass: &str) -> bool {
     use std::ffi::CString;
     let (Some(cu), Some(cp)) = (CString::new(user).ok(), CString::new(pass).ok()) else {
         return false;
     };
+    // SAFETY: `cu`/`cp` are valid NUL-terminated CStrings; `sp`/`hashed` are
+    // static libc buffers read before the next clobbering call; `crypt` is the
+    // real libcrypt symbol linked by soname.
     unsafe {
-        let sp = libc::getspnam(cu.as_ptr());
-        if sp.is_null() {
-            return false;
-        }
         #[link(name = ":libcrypt.so.1")]
         extern "C" {
             fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *mut libc::c_char;
+        }
+        let sp = libc::getspnam(cu.as_ptr());
+        if sp.is_null() {
+            return false;
         }
         let hashed = crypt(cp.as_ptr(), (*sp).sp_pwdp);
         if hashed.is_null() {
@@ -131,23 +139,6 @@ pub fn check_password(user: &str, pass: &str) -> bool {
         // constant-time compare
         let (a, b) = (got.to_bytes(), want.to_bytes());
         a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn root_lookup() {
-        assert_eq!(uid_of("root"), Some(0));
-        assert_eq!(gid_of("root"), Some(0));
-        assert_eq!(name_of_uid(0).as_deref(), Some("root"));
-    }
-
-    #[test]
-    fn missing_lookup() {
-        assert_eq!(uid_of("definitely-not-a-user-xyz"), None);
     }
 }
 
@@ -176,7 +167,7 @@ pub fn sd_listen_fds() -> Vec<std::os::fd::OwnedFd> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
         .max(0);
-    let mut out = Vec::with_capacity(n as usize);
+    let mut out = Vec::with_capacity(usize::try_from(n).unwrap_or(0));
     for i in 0..n {
         let fd = 3 + i;
         // SAFETY: systemd guarantees fds 3..3+n are open, valid listening
@@ -195,15 +186,17 @@ pub fn sd_listen_fds() -> Vec<std::os::fd::OwnedFd> {
 #[cfg(unix)]
 #[must_use]
 pub fn peer_cred(fd: std::os::fd::RawFd) -> Option<(i32, u32, u32)> {
+    // SAFETY: `ucred` is a plain POD; all-zero is a valid bit pattern.
     let mut uc: libc::ucred = unsafe { std::mem::zeroed() };
-    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::ucred>())
+        .unwrap_or(libc::socklen_t::MAX);
     // SAFETY: `uc`/`len` are valid out-params; `fd` is an open socket.
     let rc = unsafe {
         libc::getsockopt(
             fd,
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
-            &mut uc as *mut _ as *mut libc::c_void,
+            std::ptr::addr_of_mut!(uc).cast::<libc::c_void>(),
             &mut len,
         )
     };
@@ -219,13 +212,38 @@ pub fn peer_cred(fd: std::os::fd::RawFd) -> Option<(i32, u32, u32)> {
 #[cfg(unix)]
 #[must_use]
 pub fn socket_family(fd: std::os::fd::RawFd) -> i32 {
+    // SAFETY: `sockaddr_storage` is a plain POD; all-zero is a valid pattern.
     let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-    let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    let mut len = libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_storage>())
+        .unwrap_or(libc::socklen_t::MAX);
     // SAFETY: `ss`/`len` are valid out-params; `fd` is an open socket.
-    let rc = unsafe { libc::getsockname(fd, &mut ss as *mut _ as *mut libc::sockaddr, &mut len) };
+    let rc = unsafe {
+        libc::getsockname(
+            fd,
+            std::ptr::addr_of_mut!(ss).cast::<libc::sockaddr>(),
+            &mut len,
+        )
+    };
     if rc == 0 {
         i32::from(ss.ss_family)
     } else {
         -1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn root_lookup() {
+        assert_eq!(uid_of("root"), Some(0));
+        assert_eq!(gid_of("root"), Some(0));
+        assert_eq!(name_of_uid(0).as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn missing_lookup() {
+        assert_eq!(uid_of("definitely-not-a-user-xyz"), None);
     }
 }

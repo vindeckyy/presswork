@@ -34,7 +34,7 @@ struct DrvModel {
     model_name: String,
     pc_file_name: String,
     manufacturer: String,
-    filters: Vec<String>,   // "<mime> <cost> <cmd>"
+    filters: Vec<String>, // "<mime> <cost> <cmd>"
     media_sizes: Vec<String>,
     resolutions: Vec<String>,
     color_models: Vec<String>,
@@ -47,7 +47,8 @@ fn everywhere_entry() -> Ppd {
     Ppd {
         name: "everywhere".into(),
         make_and_model: "IPP Everywhere".into(),
-        device_id: "MFG:;MDL:IPP Everywhere;DES:IPP Everywhere;CMD:PWGRaster,AppleRaster,JPEG,PDF;".into(),
+        device_id: "MFG:;MDL:IPP Everywhere;DES:IPP Everywhere;CMD:PWGRaster,AppleRaster,JPEG,PDF;"
+            .into(),
         product: "(IPP Everywhere)".into(),
         psversion: "(3010.00) 0".into(),
         scheme: "drv".into(),
@@ -63,11 +64,6 @@ fn generic_entry() -> Ppd {
         psversion: "(3010.00) 0".into(),
         scheme: "drv".into(),
     }
-}
-
-/// Strip one leading `*` (the .drv "default" marker) from a token.
-fn unstar(s: &str) -> &str {
-    s.strip_prefix('*').unwrap_or(s)
 }
 
 /// The first quoted `"…"` or bare token after the directive keyword.
@@ -110,18 +106,17 @@ fn parse_drv(path: &Path, drv_root: &Path) -> Vec<DrvModel> {
         }
         let (kw, rest) = line
             .split_once(|c: char| c.is_whitespace())
-            .map(|(k, r)| (k, r.trim()))
-            .unwrap_or((line, ""));
+            .map_or((line, ""), |(k, r)| (k, r.trim()));
         match kw.trim_start_matches('*') {
             "Manufacturer" => shared.manufacturer = arg1(rest),
             "Version" => shared.version = arg1(rest),
             "ModelName" => {
                 // Flush a previous block.
                 if let Some(mut m) = cur.take() {
-                    m.media_sizes.extend(pending_media.drain(..));
-                    m.resolutions.extend(pending_res.drain(..));
-                    m.color_models.extend(pending_color.drain(..));
-                    m.filters.extend(pending_filters.drain(..));
+                    m.media_sizes.append(&mut pending_media);
+                    m.resolutions.append(&mut pending_res);
+                    m.color_models.append(&mut pending_color);
+                    m.filters.append(&mut pending_filters);
                     m.duplex = pending_duplex;
                     models.push(m);
                 }
@@ -129,10 +124,10 @@ fn parse_drv(path: &Path, drv_root: &Path) -> Vec<DrvModel> {
                 m.model_name = arg1(rest);
                 cur = Some(m);
                 // Shared caps carry into the new model.
-                pending_media = shared.media_sizes.clone();
-                pending_res = shared.resolutions.clone();
-                pending_color = shared.color_models.clone();
-                pending_filters = shared.filters.clone();
+                pending_media.clone_from(&shared.media_sizes);
+                pending_res.clone_from(&shared.resolutions);
+                pending_color.clone_from(&shared.color_models);
+                pending_filters.clone_from(&shared.filters);
                 pending_duplex = shared.duplex;
             }
             "PCFileName" => {
@@ -173,10 +168,10 @@ fn parse_drv(path: &Path, drv_root: &Path) -> Vec<DrvModel> {
         }
     }
     if let Some(mut m) = cur.take() {
-        m.media_sizes.extend(pending_media.drain(..));
-        m.resolutions.extend(pending_res.drain(..));
-        m.color_models.extend(pending_color.drain(..));
-        m.filters.extend(pending_filters.drain(..));
+        m.media_sizes.append(&mut pending_media);
+        m.resolutions.append(&mut pending_res);
+        m.color_models.append(&mut pending_color);
+        m.filters.append(&mut pending_filters);
         m.duplex = pending_duplex;
         models.push(m);
     }
@@ -196,7 +191,9 @@ impl DrvModel {
 
 /// Scan `dir` recursively for `.drv` files and emit a `drv://` `Ppd` per model.
 fn scan_drv_dir(dir: &Path, out: &mut Vec<Ppd>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -224,13 +221,19 @@ fn scan_drv_dir(dir: &Path, out: &mut Vec<Ppd>) {
 
 /// Scan `dir` recursively for `.ppd` files → `ppd`-scheme entries.
 fn scan_ppd_dir(dir: &Path, out: &mut Vec<Ppd>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
             scan_ppd_dir(&p, out);
         } else if p.extension().is_some_and(|x| x == "ppd") {
-            let name = p.strip_prefix(dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+            let name = p
+                .strip_prefix(dir)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .replace('\\', "/");
             out.push(Ppd {
                 name: name.clone(),
                 make_and_model: name.clone(),
@@ -244,11 +247,14 @@ fn scan_ppd_dir(dir: &Path, out: &mut Vec<Ppd>) {
 }
 
 fn drv_roots() -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = std::env::var("DRVROOT").map(PathBuf::from).into_iter().collect();
+    let mut v: Vec<PathBuf> = std::env::var("DRVROOT")
+        .map(PathBuf::from)
+        .into_iter()
+        .collect();
     // Also honor a `drv/` subdir next to the PPD dir.
-    for d in std::env::var("PPDDIR").map(PathBuf::from).into_iter() {
+    if let Ok(d) = std::env::var("PPDDIR").map(PathBuf::from) {
         v.push(d.join("drv"));
-        v.push(d.clone());
+        v.push(d);
     }
     v
 }
@@ -274,54 +280,97 @@ fn drv_ppd(name: &str) -> Option<String> {
 /// Emit a PPD for a parsed `.drv` model — the observable `ppdc` output shape:
 /// header + PageSize/Resolution/ColorModel/Duplex options + cupsFilter chain.
 fn compile_ppd(m: &DrvModel) -> String {
+    use std::fmt::Write as _;
     let mut s = String::new();
-    let mm = if m.model_name.is_empty() { "Unknown" } else { &m.model_name };
+    let mm = if m.model_name.is_empty() {
+        "Unknown"
+    } else {
+        &m.model_name
+    };
     s.push_str("*PPD-Adobe: \"4.3\"\n*FormatVersion: \"4.3\"\n*FileVersion: \"1.0\"\n");
     s.push_str("*LanguageVersion: English\n*LanguageEncoding: ISOLatin1\n");
-    s.push_str(&format!("*PCFileName: \"{}\"\n", m.pc_file_name));
-    s.push_str(&format!("*Manufacturer: \"{}\"\n", m.manufacturer));
-    s.push_str(&format!("*Product: \"({mm})\"\n*ModelName: \"{mm}\"\n*NickName: \"{mm}\"\n*ShortNickName: \"{mm}\"\n"));
-    s.push_str(&format!("*DriverVersion: \"{}\"\n", if m.version.is_empty() { "1.0" } else { &m.version }));
+    let _ = writeln!(s, "*PCFileName: \"{}\"", m.pc_file_name);
+    let _ = writeln!(s, "*Manufacturer: \"{}\"", m.manufacturer);
+    let _ = writeln!(
+        s,
+        "*Product: \"({mm})\"\n*ModelName: \"{mm}\"\n*NickName: \"{mm}\"\n*ShortNickName: \"{mm}\""
+    );
+    let _ = writeln!(
+        s,
+        "*DriverVersion: \"{}\"",
+        if m.version.is_empty() {
+            "1.0"
+        } else {
+            &m.version
+        }
+    );
     // Filter chain → cupsFilter lines.
     for f in &m.filters {
         let mut it = f.split_whitespace();
         if let (Some(mime), Some(cost), Some(cmd)) = (it.next(), it.next(), it.next()) {
-            s.push_str(&format!("*cupsFilter: \"{mime} {cost} {cmd}\"\n"));
+            let _ = writeln!(s, "*cupsFilter: \"{mime} {cost} {cmd}\"");
         }
     }
     // MediaSize → PageSize options.
     if !m.media_sizes.is_empty() {
-        s.push_str("*OpenUI *PageSize/Media Size: PickOne\n*OrderDependency: 10 AnySetup *PageSize\n");
+        s.push_str(
+            "*OpenUI *PageSize/Media Size: PickOne\n*OrderDependency: 10 AnySetup *PageSize\n",
+        );
         for (i, sz) in m.media_sizes.iter().enumerate() {
             if i == 0 {
-                s.push_str(&format!("*DefaultPageSize: {sz}\n"));
+                let _ = writeln!(s, "*DefaultPageSize: {sz}");
             }
-            s.push_str(&format!("*PageSize {sz}/{sz}: \"<</PageSize[612 792]>>setpagedevice\"\n"));
+            let _ = writeln!(
+                s,
+                "*PageSize {sz}/{sz}: \"<</PageSize[612 792]>>setpagedevice\""
+            );
         }
         s.push_str("*CloseUI: *PageSize\n");
     }
     // Resolution options.
     if !m.resolutions.is_empty() {
-        s.push_str("*OpenUI *Resolution/Resolution: PickOne\n*OrderDependency: 20 AnySetup *Resolution\n");
+        s.push_str(
+            "*OpenUI *Resolution/Resolution: PickOne\n*OrderDependency: 20 AnySetup *Resolution\n",
+        );
         for (i, r) in m.resolutions.iter().enumerate() {
             // `Resolution - 8 90 0 206 "720dpi/720 DPI"` → name from the quoted label.
-            let label = r.split('"').nth(1).unwrap_or("").split('/').next().unwrap_or("600dpi");
+            let label = r
+                .split('"')
+                .nth(1)
+                .unwrap_or("")
+                .split('/')
+                .next()
+                .unwrap_or("600dpi");
             if i == 0 {
-                s.push_str(&format!("*DefaultResolution: {label}\n"));
+                let _ = writeln!(s, "*DefaultResolution: {label}");
             }
-            s.push_str(&format!("*Resolution {label}: \"<</HWResolution[600 600]>>setpagedevice\"\n"));
+            let _ = writeln!(
+                s,
+                "*Resolution {label}: \"<</HWResolution[600 600]>>setpagedevice\""
+            );
         }
         s.push_str("*CloseUI: *Resolution\n");
     }
     // ColorModel → ColorModel options.
     if !m.color_models.is_empty() {
-        s.push_str("*OpenUI *ColorModel/Color Mode: PickOne\n*OrderDependency: 30 AnySetup *ColorModel\n");
+        s.push_str(
+            "*OpenUI *ColorModel/Color Mode: PickOne\n*OrderDependency: 30 AnySetup *ColorModel\n",
+        );
         for (i, c) in m.color_models.iter().enumerate() {
-            let nm = c.split_whitespace().nth(1).unwrap_or("RGB").split('/').next().unwrap_or("RGB");
+            let nm = c
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("RGB")
+                .split('/')
+                .next()
+                .unwrap_or("RGB");
             if i == 0 {
-                s.push_str(&format!("*DefaultColorModel: {nm}\n"));
+                let _ = writeln!(s, "*DefaultColorModel: {nm}");
             }
-            s.push_str(&format!("*ColorModel {nm}: \"<</cupsColorSpace 0>>setpagedevice\"\n"));
+            let _ = writeln!(
+                s,
+                "*ColorModel {nm}: \"<</cupsColorSpace 0>>setpagedevice\""
+            );
         }
         s.push_str("*CloseUI: *ColorModel\n");
     }
@@ -380,14 +429,17 @@ fn collect(drv_dirs: &[PathBuf], ppd_dirs: &[PathBuf]) -> Vec<Ppd> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mode = args.get(1).map(String::as_str).unwrap_or("");
+    let mode = args.get(1).map_or("", String::as_str);
     match mode {
         "list" => {
             let limit: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
             let opts = args.get(4..).map(|o| o.join(" ")).unwrap_or_default();
             let drv_only = opts.contains("include-schemes=drv");
             let drv_dirs = drv_roots();
-            let ppd_dirs: Vec<PathBuf> = std::env::var("PPDDIR").map(PathBuf::from).into_iter().collect();
+            let ppd_dirs: Vec<PathBuf> = std::env::var("PPDDIR")
+                .map(PathBuf::from)
+                .into_iter()
+                .collect();
             let mut n = 0usize;
             for p in collect(&drv_dirs, &ppd_dirs) {
                 if limit != 0 && n >= limit {
@@ -404,29 +456,26 @@ fn main() {
             }
         }
         "cat" => {
-            let name = args.get(2).map(String::as_str).unwrap_or("");
+            let name = args.get(2).map_or("", String::as_str);
             match name {
                 "everywhere" => print!("{}", driverless_ppd()),
-                _ if name.starts_with("drv://") => match drv_ppd(name) {
-                    Some(p) => print!("{p}"),
-                    None => {
+                _ if name.starts_with("drv://") => {
+                    if let Some(p) = drv_ppd(name) {
+                        print!("{p}")
+                    } else {
                         eprintln!("ERROR: PPD \"{name}\" not found.");
                         std::process::exit(1);
                     }
-                },
+                }
                 _ => {
-                    let mut ok = false;
-                    for d in std::env::var("PPDDIR").map(PathBuf::from).into_iter() {
+                    let ok = std::env::var("PPDDIR").map(PathBuf::from).is_ok_and(|d| {
                         let f = d.join(name);
-                        if f.is_file() {
-                            if let Ok(b) = std::fs::read(&f) {
+                        f.is_file()
+                            && std::fs::read(&f).is_ok_and(|b| {
                                 use std::io::Write as _;
-                                let _ = std::io::stdout().write_all(&b);
-                                ok = true;
-                            }
-                            break;
-                        }
-                    }
+                                std::io::stdout().write_all(&b).is_ok()
+                            })
+                    });
                     if !ok {
                         eprintln!("ERROR: PPD \"{name}\" not found.");
                         std::process::exit(1);

@@ -77,8 +77,7 @@ where
         let mut req = match read_request(stream, &mut buf, opts.idle_timeout).await {
             Ok(Some(req)) => req,
             Ok(None) => return Ok(()), // clean EOF between requests
-            Err(e @ ServeError::Disconnect) => return Err(e),
-            Err(e @ ServeError::Io(_)) => return Err(e),
+            Err(e @ (ServeError::Disconnect | ServeError::Io(_))) => return Err(e),
             Err(ServeError::BadRequest(_)) => {
                 bad += 1;
                 let resp = Response::status(StatusCode::BAD_REQUEST);

@@ -86,7 +86,7 @@ fn main() -> std::process::ExitCode {
     let args = match parse_args() {
         Ok(Some(a)) => a,
         Ok(None) => return std::process::ExitCode::SUCCESS,
-        Err(c) => return std::process::ExitCode::from(c as u8),
+        Err(c) => return std::process::ExitCode::from(u8::try_from(c).unwrap_or(1)),
     };
 
     let paths = Paths::resolve(args.server_root.as_deref());
@@ -125,13 +125,14 @@ fn emit_diagnostics(ds: &[Diagnostic]) {
     }
 }
 
+#[allow(clippy::too_many_lines)] // daemon bootstraps every subsystem inline
 async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
     let cfg = Arc::new(cfg);
     let opts = Arc::new(httpd::ServerOptions {
         server_tokens: cfg.cupsd.server_header.clone(),
         max_body: usize::try_from(cfg.cupsd.max_request_size).unwrap_or(usize::MAX),
         idle_timeout: std::time::Duration::from_secs(u64::from(
-            cfg.cupsd.timeout.clamp(0, 3600) as u32
+            u32::try_from(cfg.cupsd.timeout.clamp(0, 3600)).unwrap_or(3600),
         )),
         max_bad_requests: 4,
     });
@@ -143,9 +144,11 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
     );
 
     // Registry: load printers.conf (+ classes.conf uses same parser).
-    let mut registry = Registry::default();
-    registry.next_printer_id = 1;
-    registry.next_job_id = 1;
+    let mut registry = Registry {
+        next_printer_id: 1,
+        next_job_id: 1,
+        ..Registry::default()
+    };
     let proot = PathBuf::from(
         cfg.files
             .request_root
@@ -193,15 +196,15 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
             .files
             .error_log
             .as_deref()
-            .map_or_else(|| cups_log::Sink::stderr(), cups_log::Sink::file),
+            .map_or_else(cups_log::Sink::stderr, cups_log::Sink::file),
         access: cfg
             .files
             .access_log
             .as_deref()
-            .map_or_else(|| cups_log::Sink::stderr(), cups_log::Sink::file),
+            .map_or_else(cups_log::Sink::stderr, cups_log::Sink::file),
         time_fmt: match cfg.cupsd.log_time_format {
             cups_config::LogTimeFormat::Usecs => cups_log::TimeFormat::Usecs,
-            _ => cups_log::TimeFormat::Standard,
+            cups_config::LogTimeFormat::Standard => cups_log::TimeFormat::Standard,
         },
     });
 
@@ -240,7 +243,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
             .iter()
             .find_map(|l| match &l.addr {
                 ListenAddr::Tcp(a) => Some(a.port()),
-                _ => None,
+                ListenAddr::Unix(_) => None,
             })
             .unwrap_or(631);
         let dnssd_on = cfg.cupsd.browsing
@@ -255,7 +258,9 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
             match dnssd::Advertiser::start(&host, &computer, port, tls.is_some()) {
                 Ok(mut adv) => {
                     // Publish every currently-shared queue.
-                    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+                    let reg = registry
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let mut n = 0;
                     for p in reg.printers.values() {
                         if p.shared {
@@ -265,7 +270,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                                 make_model: p.make_model.clone().unwrap_or_default(),
                                 location: p.location.clone().unwrap_or_default(),
                                 pdl: String::new(),
-                                printer_type: p.ptype as u32,
+                                printer_type: u32::try_from(p.ptype).unwrap_or_default(),
                                 printer_state: p.state,
                                 uuid: p.uuid.clone(),
                                 is_class: p.ptype & printer::ptype::CLASS != 0,
@@ -279,7 +284,9 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         cups_log::Level::Info,
                         format!("DNS-SD advertising {n} shared printer(s) on {host}"),
                     );
-                    *dnssd_state.write().unwrap_or_else(|e| e.into_inner()) = Some(adv);
+                    *dnssd_state
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(adv);
                 }
                 Err(e) => log.err(
                     cups_log::Level::Warn,
@@ -452,6 +459,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
 }
 
 fn bind_unix(p: &Path) -> std::io::Result<UnixListener> {
+    use std::os::unix::fs::PermissionsExt;
     if p.exists() {
         std::fs::remove_file(p)?;
     }
@@ -459,11 +467,11 @@ fn bind_unix(p: &Path) -> std::io::Result<UnixListener> {
         let _ = std::fs::create_dir_all(dir);
     }
     let l = UnixListener::bind(p)?;
-    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o777))?;
     Ok(l)
 }
 
+#[allow(clippy::too_many_arguments)] // threads daemon ctx through the accept loop
 async fn accept_tcp(
     listener: TcpListener,
     ssl_first_byte: bool,
@@ -487,7 +495,7 @@ async fn accept_tcp(
                 let registry = registry.clone();
                 let cfg = cfg.clone();
                 let local = peer.ip().is_loopback();
-                let port = stream.local_addr().map(|a| a.port()).unwrap_or(631);
+                let port = stream.local_addr().map_or(631, |a| a.port());
                 let host = peer.ip().to_string();
                 let log = log.clone();
                 let jobs = jobs.clone();
@@ -529,6 +537,7 @@ async fn accept_tcp(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn accept_unix(
     listener: UnixListener,
     tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
@@ -597,6 +606,7 @@ async fn accept_unix(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve_one<S>(
     stream: S,
     opts: Arc<httpd::ServerOptions>,
@@ -730,7 +740,7 @@ struct ConnArgs<'a> {
     peer: &'a Option<(String, Vec<String>)>,
 }
 
-/// `serve_connection` bound to a dispatch_req closure.
+/// `serve_connection` bound to a `dispatch_req` closure.
 async fn serve_conn<S>(
     stream: &mut S,
     opts: &httpd::ServerOptions,
@@ -770,7 +780,7 @@ struct Logs {
 }
 
 impl Logs {
-    /// `cupsdWriteErrorLog()` — error_log line (mirrors `E [time] msg`),
+    /// `cupsdWriteErrorLog()` — `error_log` line (mirrors `E [time] msg`),
     /// echoed to stderr like upstream's foreground mode.
     fn err(&self, level: cups_log::Level, msg: impl AsRef<str>) {
         let line = cups_log::error_line(level, self.time_fmt, msg.as_ref());
@@ -780,6 +790,7 @@ impl Logs {
 }
 
 /// Request dispatch: static files, IPP ops, misc.
+#[allow(clippy::too_many_arguments, clippy::ref_option)]
 fn dispatch_req(
     req: &Request,
     doc_root: &Path,
@@ -840,7 +851,7 @@ fn dispatch_req(
         }
         Method::Options if req.wants_tls_upgrade => Response::status(StatusCode::UPGRADE_REQUIRED),
         Method::Options => {
-            log_access(&**log, host, req, 200, 0, "-", "-");
+            log_access(log, host, req, 200, 0, "-", "-");
             Response::status(StatusCode::OK)
         }
         Method::Post => cgi::dispatch(
@@ -854,13 +865,13 @@ fn dispatch_req(
         )
         .unwrap_or_else(|| Response::status(StatusCode::NOT_IMPLEMENTED)),
         _ => {
-            log_access(&**log, host, req, 501, 0, "-", "-");
+            log_access(log, host, req, 501, 0, "-", "-");
             Response::status(StatusCode::NOT_IMPLEMENTED)
         }
     }
 }
 
-/// `cupsdLogRequest()` — access_log line after serving.
+/// `cupsdLogRequest()` — `access_log` line after serving.
 fn log_access(
     log: &Logs,
     host: &str,
@@ -922,6 +933,7 @@ fn mime_guess(p: &Path) -> &'static str {
 
 /// Decode the IPP request, run the op dispatcher, re-encode the
 /// response — the `cupsdProcessIPPRequest` equivalent.
+#[allow(clippy::too_many_arguments, clippy::ref_option)]
 fn ipp_dispatch(
     req: &Request,
     registry: &std::sync::RwLock<Registry>,
@@ -940,7 +952,7 @@ fn ipp_dispatch(
     peer: &Option<(String, Vec<String>)>,
 ) -> Response {
     let Ok((msg, consumed)) = ipp_codec::decode(req.body.as_bytes()) else {
-        log_access(&**log, host, req, 400, 0, "-", "-");
+        log_access(log, host, req, 400, 0, "-", "-");
         return Response::status(StatusCode::BAD_REQUEST);
     };
     let document = &req.body.as_bytes()[consumed..];
@@ -966,7 +978,7 @@ fn ipp_dispatch(
     ctx.client_addr = client_addr;
     // Basic auth: Authorization header -> authenticated user + groups.
     if let Some(h) = req.headers.get("authorization") {
-        if let Some(creds) = authn::parse(&h) {
+        if let Some(creds) = authn::parse(h) {
             if let Some((user, groups)) = authn::authenticate(&creds) {
                 ctx.user_groups = groups;
                 ctx.username = Some(user);
@@ -978,7 +990,7 @@ fn ipp_dispatch(
     // `cupsdAuthorize` PeerCred semantics for local clients.
     if ctx.username.is_none() {
         if let Some((user, groups)) = peer {
-            ctx.user_groups = groups.clone();
+            ctx.user_groups.clone_from(groups);
             ctx.username = Some(user.clone());
         }
     }
@@ -992,7 +1004,7 @@ fn ipp_dispatch(
     match ipp_codec::encode(&resp) {
         Ok(b) => {
             let n = b.len() as u64;
-            log_access(&**log, host, req, 200, n, op_name, status_name);
+            log_access(log, host, req, 200, n, op_name, status_name);
             Response::ipp(StatusCode::OK, b)
         }
         Err(_) => Response::status(StatusCode::INTERNAL),
@@ -1007,13 +1019,12 @@ fn printer_ppd(p: &printer::Printer, server_bin: &std::path::Path) -> Option<Str
         .options
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case("ppd-name"))
-        .map(|(_, v)| v.clone())
-        .unwrap_or_else(|| "everywhere".to_string());
+        .map_or_else(|| "everywhere".to_string(), |(_, v)| v.clone());
     let driverd = server_bin.join("daemon").join("cups-driverd");
-    let base = server_bin
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    let base = server_bin.parent().map_or_else(
+        || std::path::PathBuf::from("/usr/share"),
+        std::path::Path::to_path_buf,
+    );
     let out = std::process::Command::new(driverd)
         .args(["cat", &name])
         .env("PPDDIR", base.join("ppd"))
@@ -1041,15 +1052,22 @@ fn ppd_filters(ppd: &str) -> Vec<(String, u32, String)> {
         // `*cupsFilter: "mime cost prog"` / `*cupsFilter2: "dst src cost prog"`.
         let val = rest
             .split_once(':')
-            .map(|(_, v)| v.trim().trim_matches('"'))
-            .unwrap_or("");
+            .map_or("", |(_, v)| v.trim().trim_matches('"'));
         let parts: Vec<&str> = val.split_whitespace().collect();
         if line.contains("cupsFilter2") {
             if parts.len() >= 4 {
-                out.push((parts[0].into(), parts[2].parse().unwrap_or(0), parts[3].into()));
+                out.push((
+                    parts[0].into(),
+                    parts[2].parse().unwrap_or(0),
+                    parts[3].into(),
+                ));
             }
         } else if parts.len() >= 3 {
-            out.push((parts[0].into(), parts[1].parse().unwrap_or(0), parts[2].into()));
+            out.push((
+                parts[0].into(),
+                parts[1].parse().unwrap_or(0),
+                parts[2].into(),
+            ));
         }
     }
     out
@@ -1090,6 +1108,7 @@ fn ppd_final_filter(
 /// `start_job` scheduler tick — pick the first pending job whose printer is
 /// idle + accepting, resolve its filter chain, and spawn the pipeline in a
 /// watcher thread that marks the job completed/aborted on exit.
+#[allow(clippy::too_many_lines)]
 fn schedule_tick(
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     subs: &Arc<std::sync::RwLock<events::Subscriptions>>,
@@ -1112,8 +1131,12 @@ fn schedule_tick(
     );
 
     let found: Option<(i32, pipeline::JobSpec, String, String)> = {
-        let jobs_r = jobs.read().unwrap_or_else(|e| e.into_inner());
-        let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+        let jobs_r = jobs
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reg = registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut out = None;
         for j in jobs_r.active() {
             if j.state != job::JobState::Pending || j.backend_pid.is_some() {
@@ -1170,10 +1193,10 @@ fn schedule_tick(
     // e.g. `rastertofoo` converts `cups-raster` to the device stream.
     if let Some(p) = registry
         .read()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .find(&spec.printer)
     {
-        if let Some(ppf) = ppd_final_filter(&p, &server_bin, &dst) {
+        if let Some(ppf) = ppd_final_filter(p, &server_bin, &dst) {
             chain.push(ppf);
         }
     }
@@ -1182,17 +1205,16 @@ fn schedule_tick(
         Ok(mut pipe) => {
             if let Some(j) = jobs
                 .write()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get_mut(job_id)
             {
                 j.state = job::JobState::Processing;
                 j.processing_at = Some(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs() as i64)
-                        .unwrap_or(0),
+                        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX)),
                 );
-                j.backend_pid = Some(pipe.backend.id() as i32);
+                j.backend_pid = Some(i32::try_from(pipe.backend.id()).unwrap_or(-1));
                 let _ = j.save(&request_root);
             }
             log.err(
@@ -1207,10 +1229,10 @@ fn schedule_tick(
                 for mut f in pipe.filters {
                     let _ = f.wait();
                 }
-                let ok = status.map(|s| s.success()).unwrap_or(false);
+                let ok = status.is_ok_and(|s| s.success());
                 if let Some(j) = jobs
                     .write()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .get_mut(job_id)
                 {
                     j.state = if ok {
@@ -1231,18 +1253,20 @@ fn schedule_tick(
                     } else {
                         events::Event::JobStopped
                     };
-                    let dest = j.dest.clone();
-                    subs.write().unwrap_or_else(|e| e.into_inner()).push(
-                        ev,
-                        Some(&dest),
-                        Some(job_id),
-                        Some(match j.state {
-                            job::JobState::Completed => 9,
-                            job::JobState::Aborted => 7,
-                            _ => 8,
-                        }),
-                        format!("Job {job_id} {}.", if ok { "completed" } else { "aborted" }),
-                    );
+                    let job_dest = j.dest.clone();
+                    subs.write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(
+                            ev,
+                            Some(&job_dest),
+                            Some(job_id),
+                            Some(match j.state {
+                                job::JobState::Completed => 9,
+                                job::JobState::Aborted => 7,
+                                _ => 8,
+                            }),
+                            &format!("Job {job_id} {}.", if ok { "completed" } else { "aborted" }),
+                        );
                 }
                 log.err(
                     if ok {
@@ -1264,7 +1288,7 @@ fn schedule_tick(
         Err(e) => {
             if let Some(j) = jobs
                 .write()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .get_mut(job_id)
             {
                 j.state = job::JobState::Aborted;

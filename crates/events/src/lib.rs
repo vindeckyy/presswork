@@ -35,6 +35,7 @@ pub enum Event {
 
 impl Event {
     /// RFC `notify-events` keyword.
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::PrinterAdded => "printer-added",
@@ -59,6 +60,7 @@ impl Event {
     }
 
     /// Parse a `notify-events` keyword. `None` if unknown.
+    #[must_use]
     pub fn from_name(n: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|e| e.name() == n)
     }
@@ -134,6 +136,7 @@ pub struct Subscriptions {
 }
 
 impl Subscriptions {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             subs: BTreeMap::new(),
@@ -191,7 +194,7 @@ impl Subscriptions {
         printer: Option<&str>,
         job_id: Option<i32>,
         job_state: Option<i32>,
-        text: String,
+        text: &str,
     ) {
         self.expire();
         for s in self.subs.values_mut() {
@@ -213,7 +216,7 @@ impl Subscriptions {
                 printer: printer.map(str::to_string),
                 job_id,
                 job_state,
-                text: text.clone(),
+                text: text.to_string(),
             });
             // Bound the queue (upstream MaxNotifications ~ default 100).
             while s.queue.len() > 100 {
@@ -222,6 +225,7 @@ impl Subscriptions {
         }
     }
 
+    #[must_use]
     pub fn find(&self, id: i32) -> Option<&Subscription> {
         self.subs.get(&id)
     }
@@ -245,6 +249,7 @@ impl Subscriptions {
         }
     }
     /// All subscriptions, optionally filtered to a printer/owner.
+    #[must_use]
     pub fn list(&self, printer: Option<&str>, owner: Option<&str>) -> Vec<&Subscription> {
         self.subs
             .values()
@@ -267,18 +272,21 @@ impl Subscriptions {
 /// `Subscription` helpers for building IPP attrs.
 impl Subscription {
     /// `notify-lease-duration` remaining (0 = expired/never).
+    #[must_use]
     pub fn lease_remaining(&self) -> i32 {
         if self.lease == i64::MAX {
             0
         } else {
-            (self.lease - now()).max(0) as i32
+            i32::try_from((self.lease - now()).max(0)).unwrap_or(i32::MAX)
         }
     }
     /// Queued notification count.
+    #[must_use]
     pub fn pending(&self) -> usize {
         self.queue.len()
     }
     /// Re-queue `n` (no-op ordering).
+    #[must_use]
     pub fn event_names(&self) -> Vec<String> {
         self.events.iter().map(|e| e.name().to_string()).collect()
     }
@@ -287,8 +295,7 @@ impl Subscription {
 fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 #[cfg(test)]
@@ -314,13 +321,7 @@ mod tests {
             0,
             None,
         );
-        t.push(
-            Event::PrinterStateChanged,
-            Some("p1"),
-            None,
-            None,
-            "x".into(),
-        );
+        t.push(Event::PrinterStateChanged, Some("p1"), None, None, "x");
         assert_eq!(t.find(a).unwrap().pending(), 1);
         assert_eq!(t.drain(a).len(), 1);
         assert_eq!(t.drain(a).len(), 0); // drained
@@ -350,14 +351,8 @@ mod tests {
             0,
             None,
         );
-        t.push(
-            Event::JobStateChanged,
-            None,
-            Some(8),
-            None,
-            "wrong job".into(),
-        );
-        t.push(Event::JobStateChanged, None, Some(7), None, "right".into());
+        t.push(Event::JobStateChanged, None, Some(8), None, "wrong job");
+        t.push(Event::JobStateChanged, None, Some(7), None, "right");
         assert_eq!(t.find(a).unwrap().pending(), 1);
     }
 }

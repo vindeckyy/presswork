@@ -21,14 +21,13 @@ fn main() {
     let timeout: u64 = a[3].parse().unwrap_or(30);
     let dir = a
         .get(4)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/lib/cups/backend"));
+        .map_or_else(|| PathBuf::from("/usr/lib/cups/backend"), PathBuf::from);
 
     let mut backends: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map(|rd| {
             rd.flatten()
                 .map(|e| e.path())
-                .filter(|p| p.metadata().map(|m| m.is_file()).unwrap_or(false) && is_exec(p))
+                .filter(|p| p.metadata().is_ok_and(|m| m.is_file()) && is_exec(p))
                 .collect()
         })
         .unwrap_or_default();
@@ -49,7 +48,7 @@ fn main() {
     }
 
     let mut count = 0;
-    for (path, mut c) in children {
+    for (path, c) in children {
         // crude per-backend timeout: wait remaining budget
         let rem = deadline.saturating_duration_since(std::time::Instant::now());
         let (tx, rx) = std::sync::mpsc::channel();
@@ -83,8 +82,7 @@ fn is_exec(p: &std::path::Path) -> bool {
     {
         use std::os::unix::fs::PermissionsExt;
         p.metadata()
-            .map(|m| m.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+            .is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
     }
     #[cfg(not(unix))]
     {

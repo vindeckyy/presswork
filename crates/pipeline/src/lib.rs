@@ -9,7 +9,7 @@
 //!   env : `CONTENT_TYPE`, `FINAL_CONTENT_TYPE`, `DEVICE_URI`, `PRINTER`,
 //!         `PPD`, `RIP_MAX_CACHE`, `CUPS_SERVERROOT`, ... plus `PassEnv`.
 //! Stage `i`'s stdout is stage `i+1`'s stdin; the backend's stdout is a
-//! side-channel logged to error_log, and its exit code controls job retry.
+//! side-channel logged to `error_log`, and its exit code controls job retry.
 
 use std::collections::HashMap;
 use std::io;
@@ -121,7 +121,7 @@ impl JobSpec {
         for conv in chain {
             let prog = resolve(&self.filter_dir, &conv.program);
             let mut cmd = Command::new(&prog);
-            cmd.args(&self.argv(true))
+            cmd.args(self.argv(true))
                 .env_clear()
                 .envs(self.stage_env(&conv.dst))
                 .stdin(next_stdin)
@@ -130,11 +130,7 @@ impl JobSpec {
             let mut child = cmd
                 .spawn()
                 .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", prog.display())))?;
-            next_stdin = child
-                .stdout
-                .take()
-                .map(Into::into)
-                .unwrap_or_else(Stdio::null);
+            next_stdin = child.stdout.take().map_or_else(Stdio::null, Into::into);
             input_is_file = false;
             filters.push(child);
         }
@@ -142,7 +138,7 @@ impl JobSpec {
         // Backend: reads last stage's output, writes to device-uri.
         let bprog = resolve(&self.backend_dir, &self.backend);
         let mut bc = Command::new(&bprog);
-        bc.args(&self.argv(input_is_file))
+        bc.args(self.argv(input_is_file))
             .env_clear()
             .envs(self.stage_env(&self.dst_type))
             .stdin(next_stdin)
@@ -168,6 +164,7 @@ fn resolve(dir: &Path, program: &str) -> PathBuf {
 
 /// The backend name for a device URI: scheme part, with CUPS's historical
 /// aliases (`http`→`ipp`, `lpd`→`lpd`, `socket`→`socket`, `usb`→`usb`).
+#[must_use]
 pub fn backend_for_uri(device_uri: &str) -> String {
     let scheme = device_uri.split(':').next().unwrap_or("file");
     match scheme {

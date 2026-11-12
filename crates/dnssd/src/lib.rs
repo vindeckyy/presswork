@@ -35,7 +35,7 @@ pub struct SharedPrinter {
     pub location: String,
     /// `pdl` (default `application/postscript`).
     pub pdl: String,
-    /// `printer-type` bitmask (CUPS_PTYPE_*).
+    /// `printer-type` bitmask (`CUPS_PTYPE`_*).
     pub printer_type: u32,
     /// `printer-state` (idle=3, processing=4, stopped=5).
     pub printer_state: i32,
@@ -252,6 +252,7 @@ impl Advertiser {
     }
 
     /// Number of printers currently advertised.
+    #[must_use]
     pub fn count(&self) -> usize {
         self.registered.len()
     }
@@ -286,16 +287,15 @@ impl Advertiser {
 /// `cupsdStartBrowsing`-style discovery — resolve `_ipp._tcp` (+`_ipps._tcp`)
 /// services on the local network for `timeout`, returning each as a
 /// [`RemotePrinter`] for the `dnssd` backend's device list.
+#[must_use]
 pub fn browse_ipp(timeout: Duration) -> Vec<RemotePrinter> {
-    let daemon = match ServiceDaemon::new() {
-        Ok(d) => d,
-        Err(_) => return Vec::new(),
+    let Ok(daemon) = ServiceDaemon::new() else {
+        return Vec::new();
     };
     let mut out = Vec::new();
     for regtype in ["_ipp._tcp.local.", "_ipps._tcp.local."] {
-        let receiver = match daemon.browse(regtype) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(receiver) = daemon.browse(regtype) else {
+            continue;
         };
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
@@ -332,11 +332,51 @@ pub fn browse_ipp(timeout: Duration) -> Vec<RemotePrinter> {
 /// `hostname.local.` — ensure the mDNS host has the `.local.` suffix.
 fn normalize_local(host: &str) -> String {
     let h = host.trim_end_matches('.');
-    if h.ends_with(".local") {
+    if h.to_ascii_lowercase().ends_with(".local") {
         format!("{h}.")
     } else {
         format!("{h}.local.")
     }
+}
+
+/// Resolve a `dnssd://<instance>._ipp._tcp.local/<rp>` device URI to a real
+/// `ipp{s}://host:port/<rp>` URI — the dnssd backend's print-path resolution
+/// (upstream `backend/dnssd.c` `cupsBackendResolve`). Returns `None` when the
+/// service isn't on the wire within `timeout`.
+#[must_use]
+pub fn resolve_uri(device_uri: &str, timeout: Duration) -> Option<String> {
+    // dnssd://<instance>._ipp(s)._tcp[.local][/<rp>]
+    let rest = device_uri.strip_prefix("dnssd://")?;
+    let (authority, rp) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i + 1..]),
+        None => (rest, "ipp/print"),
+    };
+    // Determine regtype from the instance suffix.
+    let (regtype, secure) = if authority.contains("._ipps.") {
+        ("_ipps._tcp.local.", true)
+    } else {
+        ("_ipp._tcp.local.", false)
+    };
+    let instance = authority.trim_end_matches(".local.").to_string();
+
+    let daemon = ServiceDaemon::new().ok()?;
+    let receiver = daemon.browse(regtype).ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut found = None;
+    while std::time::Instant::now() < deadline && found.is_none() {
+        if let Ok(ServiceEvent::ServiceResolved(info)) =
+            receiver.recv_timeout(Duration::from_millis(120))
+        {
+            // Match by instance full-name (the part before the regtype).
+            if info.get_fullname().starts_with(&instance) {
+                let scheme = if secure { "ipps" } else { "ipp" };
+                let host = info.get_hostname().trim_end_matches('.').to_string();
+                found = Some(format!("{scheme}://{}:{}/{rp}", host, info.get_port()));
+            }
+        }
+    }
+    let _ = daemon.shutdown();
+    found
 }
 
 #[cfg(test)]
@@ -352,7 +392,7 @@ mod tests {
 
     #[test]
     fn txt_record_keys() {
-        let mut a = Advertiser::start("testhost", "Test", 631, true).unwrap();
+        let a = Advertiser::start("testhost", "Test", 631, true).unwrap();
         let p = SharedPrinter {
             name: "office".into(),
             info: "Office HP".into(),
@@ -388,43 +428,4 @@ mod tests {
         };
         assert_eq!(a.instance(&p2), "q @ Workstation");
     }
-}
-
-/// Resolve a `dnssd://<instance>._ipp._tcp.local/<rp>` device URI to a real
-/// `ipp{s}://host:port/<rp>` URI — the dnssd backend's print-path resolution
-/// (upstream `backend/dnssd.c` `cupsBackendResolve`). Returns `None` when the
-/// service isn't on the wire within `timeout`.
-pub fn resolve_uri(device_uri: &str, timeout: Duration) -> Option<String> {
-    // dnssd://<instance>._ipp(s)._tcp[.local][/<rp>]
-    let rest = device_uri.strip_prefix("dnssd://")?;
-    let (authority, rp) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i + 1..]),
-        None => (rest, "ipp/print"),
-    };
-    // Determine regtype from the instance suffix.
-    let (regtype, secure) = if authority.contains("._ipps.") {
-        ("_ipps._tcp.local.", true)
-    } else {
-        ("_ipp._tcp.local.", false)
-    };
-    let instance = authority.trim_end_matches(".local.").to_string();
-
-    let daemon = ServiceDaemon::new().ok()?;
-    let receiver = daemon.browse(regtype).ok()?;
-    let deadline = std::time::Instant::now() + timeout;
-    let mut found = None;
-    while std::time::Instant::now() < deadline && found.is_none() {
-        if let Ok(ServiceEvent::ServiceResolved(info)) =
-            receiver.recv_timeout(Duration::from_millis(120))
-        {
-            // Match by instance full-name (the part before the regtype).
-            if info.get_fullname().starts_with(&instance) {
-                let scheme = if secure { "ipps" } else { "ipp" };
-                let host = info.get_hostname().trim_end_matches('.').to_string();
-                found = Some(format!("{scheme}://{}:{}/{rp}", host, info.get_port()));
-            }
-        }
-    }
-    let _ = daemon.shutdown();
-    found
 }

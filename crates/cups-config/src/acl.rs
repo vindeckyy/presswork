@@ -86,6 +86,7 @@ pub enum AaaResult {
 
 /// `parse_aaa()` — handle one directive inside a `<Location>`/`<Limit>`/
 /// `<Policy><Limit>` block. Returns `Unknown` for anything it doesn't own.
+#[allow(clippy::too_many_lines)]
 pub fn parse_aaa<D: Diag>(
     loc: &mut Location,
     line: &ConfLine,

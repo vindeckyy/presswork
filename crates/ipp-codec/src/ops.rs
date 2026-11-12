@@ -251,10 +251,8 @@ pub mod op {
     /// (case-insensitive; `0x…` hex and `windows-ext` accepted;
     /// `Create-Job-Subscription` legacy alias).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // a flat op-name lookup table, not logic
     pub fn value(name: &str) -> Option<u16> {
-        if let Some(hex) = name.strip_prefix("0x") {
-            return u16::from_str_radix(hex, 16).ok();
-        }
         // Linear scan over every named op (same tables `name()` uses).
         const TABLE: &[(u16, &str)] = &[
             (PRINT_JOB, "Print-Job"),
@@ -381,6 +379,9 @@ pub mod op {
             (CUPS_GET_DOCUMENT, "CUPS-Get-Document"),
             (CUPS_CREATE_LOCAL_PRINTER, "CUPS-Create-Local-Printer"),
         ];
+        if let Some(hex) = name.strip_prefix("0x") {
+            return u16::from_str_radix(hex, 16).ok();
+        }
         for (op, n) in TABLE {
             if n.eq_ignore_ascii_case(name) {
                 return Some(*op);

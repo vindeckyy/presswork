@@ -1,4 +1,22 @@
 //! `cupsdProcessIPPRequest()` — validation preamble + op switch.
+//!
+//! This is a thin, generated-style translation layer mirroring upstream's
+//! op switch. IPP `integer`/`enum` attributes are `i32` while the job/
+//! printer model carries `i64`/`usize`; the downcasts below are intentional
+//! and bounded by the request model, so the numeric-cast and dispatch-table
+//! size lints are allowed module-wide rather than noise per site.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value,
+    clippy::used_underscore_binding,
+    clippy::missing_panics_doc,
+    clippy::struct_excessive_bools,
+    clippy::ref_option,
+    clippy::format_push_string
+)]
 
 use ipp_codec::{ops::op, ops::status, tags, Attribute, IppMessage, Value};
 use job::{Job, JobState, Jobs};
@@ -50,7 +68,7 @@ pub struct Ctx<'a> {
     pub sharing: bool,
     /// `operations-supported` — the op list the daemon advertises.
     pub operations_supported: Vec<i32>,
-    /// StrictConformance mode.
+    /// `StrictConformance` mode.
     pub strict: bool,
     /// Queued job count per printer (0 until the `job` crate lands).
     pub queued_job_count: i32,
@@ -86,17 +104,19 @@ pub struct Ctx<'a> {
 impl Ctx<'_> {
     /// Read guard on the subscription table.
     pub fn subs(&self) -> std::sync::RwLockReadGuard<'_, events::Subscriptions> {
-        self.subscriptions.read().unwrap_or_else(|e| e.into_inner())
+        self.subscriptions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
     /// Write guard on the subscription table.
     pub fn subs_write(&self) -> std::sync::RwLockWriteGuard<'_, events::Subscriptions> {
         self.subscriptions
             .write()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
     /// Emit an event to all covering subscriptions.
     pub fn event(&self, ev: events::Event, printer: Option<&str>, job: Option<i32>, text: String) {
-        self.subs_write().push(ev, printer, job, None, text);
+        self.subs_write().push(ev, printer, job, None, &text);
     }
 
     /// `cupsdRegisterPrinter` — advertise a shared printer via DNS-SD.
@@ -104,7 +124,7 @@ impl Ctx<'_> {
         if let Some(adv) = self
             .dnssd
             .write()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_mut()
         {
             let _ = adv.publish(&dnssd::SharedPrinter {
@@ -127,7 +147,7 @@ impl Ctx<'_> {
         if let Some(adv) = self
             .dnssd
             .write()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_mut()
         {
             adv.unpublish(name);
@@ -138,12 +158,16 @@ impl Ctx<'_> {
 impl<'a> Ctx<'a> {
     /// Short-lived read guard on the registry.
     pub fn reg(&self) -> std::sync::RwLockReadGuard<'_, Registry> {
-        self.registry.read().unwrap_or_else(|e| e.into_inner())
+        self.registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Write guard on the registry (admin ops only).
     pub fn reg_write(&self) -> std::sync::RwLockWriteGuard<'_, Registry> {
-        self.registry.write().unwrap_or_else(|e| e.into_inner())
+        self.registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Build a context with config-derived defaults.
@@ -337,16 +361,13 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
     }
 
     // First two op attrs must be charset + natural-language.
-    let op_group = match req.group(tags::OPERATION) {
-        Some(g) => g,
-        None => {
-            send_status(
-                &mut resp,
-                status::ERROR_BAD_REQUEST,
-                "No attributes in request.",
-            );
-            return resp;
-        }
+    let Some(op_group) = req.group(tags::OPERATION) else {
+        send_status(
+            &mut resp,
+            status::ERROR_BAD_REQUEST,
+            "No attributes in request.",
+        );
+        return resp;
     };
     // RFC 8011 §4.1.4: the first two operation attributes must be
     // `attributes-charset` then `attributes-natural-language`, each a
@@ -405,19 +426,18 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
             || x == op::PURGE_JOBS
     );
     let uri_attr = if needs_uri {
-        match req
+        if let Some(a) = req
             .find(tags::OPERATION, "printer-uri")
             .or_else(|| req.find(tags::OPERATION, "job-uri"))
         {
-            Some(a) => Some(a),
-            None => {
-                send_status(
-                    &mut resp,
-                    status::ERROR_BAD_REQUEST,
-                    "Missing required attributes.",
-                );
-                return resp;
-            }
+            Some(a)
+        } else {
+            send_status(
+                &mut resp,
+                status::ERROR_BAD_REQUEST,
+                "Missing required attributes.",
+            );
+            return resp;
         }
     } else {
         req.find(tags::OPERATION, "printer-uri")
@@ -432,7 +452,7 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
 fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
     match u32::from(req.code) {
         x if x == u32::from(op::GET_PRINTER_ATTRIBUTES) => {
-            get_printer_attrs(req, resp, ctx, uri_attr)
+            get_printer_attrs(req, resp, ctx, uri_attr);
         }
         x if x == u32::from(op::GET_PRINTER_SUPPORTED_VALUES) => {
             get_printer_supported(resp, ctx, uri_attr);
@@ -462,7 +482,7 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
             "Job not found.",
         ),
         x if x == u32::from(op::SUSPEND_CURRENT_JOB) => {
-            suspend_current_job(req, resp, ctx, uri_attr)
+            suspend_current_job(req, resp, ctx, uri_attr);
         }
         x if x == u32::from(op::RESUME_JOB) => transition_job(
             req,
@@ -495,43 +515,43 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::CUPS_MOVE_JOB) => cups_move_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_JOB_ATTRIBUTES) => get_job_attributes(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CUPS_ADD_MODIFY_PRINTER) => {
-            add_modify_printer(req, resp, ctx, uri_attr)
+            add_modify_printer(req, resp, ctx, uri_attr);
         }
         x if x == u32::from(op::CUPS_DELETE_PRINTER) => delete_printer(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CUPS_CREATE_LOCAL_PRINTER) => {
-            create_local_printer(req, resp, ctx)
+            create_local_printer(req, resp, ctx);
         }
         x if x == u32::from(op::CUPS_SET_DEFAULT) => set_default(req, resp, ctx, uri_attr),
         x if x == u32::from(op::PAUSE_PRINTER)
             || x == u32::from(op::PAUSE_PRINTER_AFTER_CURRENT_JOB)
             || x == u32::from(op::SHUTDOWN_PRINTER) =>
         {
-            set_printer_state(req, resp, ctx, uri_attr, 5)
+            set_printer_state(req, resp, ctx, uri_attr, 5);
         }
         x if x == u32::from(op::RESUME_PRINTER)
             || x == u32::from(op::RESTART_PRINTER)
             || x == u32::from(op::STARTUP_PRINTER) =>
         {
-            set_printer_state(req, resp, ctx, uri_attr, 3)
+            set_printer_state(req, resp, ctx, uri_attr, 3);
         }
         x if x == u32::from(op::CUPS_ACCEPT_JOBS) || x == u32::from(op::ENABLE_PRINTER) => {
-            set_accepting(req, resp, ctx, uri_attr, true)
+            set_accepting(req, resp, ctx, uri_attr, true);
         }
         x if x == u32::from(op::CUPS_REJECT_JOBS) || x == u32::from(op::DISABLE_PRINTER) => {
-            set_accepting(req, resp, ctx, uri_attr, false)
+            set_accepting(req, resp, ctx, uri_attr, false);
         }
         x if x == u32::from(op::SET_PRINTER_ATTRIBUTES) => {
-            set_printer_attributes(req, resp, ctx, uri_attr)
+            set_printer_attributes(req, resp, ctx, uri_attr);
         }
         x if x == u32::from(op::CUPS_GET_DEVICES) => get_devices(req, resp, ctx),
         x if x == u32::from(op::CREATE_PRINTER_SUBSCRIPTIONS)
             || x == u32::from(op::CREATE_JOB_SUBSCRIPTIONS) =>
         {
-            create_subscription(req, resp, ctx, uri_attr)
+            create_subscription(req, resp, ctx, uri_attr);
         }
         x if x == u32::from(op::GET_SUBSCRIPTIONS) => get_subscriptions(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_SUBSCRIPTION_ATTRIBUTES) => {
-            get_subscription_attrs(req, resp, ctx)
+            get_subscription_attrs(req, resp, ctx);
         }
         x if x == u32::from(op::RENEW_SUBSCRIPTION) => renew_subscription(req, resp, ctx),
         x if x == u32::from(op::CANCEL_SUBSCRIPTION) => cancel_subscription(req, resp, ctx),
@@ -778,8 +798,7 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         .find(tags::OPERATION, "limit")
         .and_then(attr_int)
         .filter(|l| *l > 0)
-        .map(|l| l as usize)
-        .unwrap_or(usize::MAX);
+        .map_or(usize::MAX, |l| l as usize);
     // `my-jobs` restricts the listing to the requesting user's jobs.
     let my_jobs = req
         .find(tags::OPERATION, "my-jobs")
@@ -793,7 +812,10 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
     } else {
         None
     };
-    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let jobs = ctx
+        .jobs
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // `requested-attributes` absent → the RFC default is just
     // `job-id`+`job-uri`, not the full attribute set.
     let ra = requested_attrs(req).or_else(|| Some(vec!["job-id".into(), "job-uri".into()]));
@@ -892,7 +914,7 @@ fn print_uri(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
                 (d, n)
             }
             Err(e) => {
-                send_status(resp, status::ERROR_NOT_FOUND, &format!("document-uri: {e}"));
+                send_status(resp, status::ERROR_NOT_FOUND, format!("document-uri: {e}"));
                 return;
             }
         }
@@ -943,12 +965,15 @@ fn submit_document(
         .and_then(attr_int)
         .map_or(1, |v| v.max(1) as i32);
 
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let id = jobs.alloc_id();
     let mut job = Job::new(id, dest.clone(), user);
     job.title = title;
     job.copies = copies;
-    job.format = format.clone();
+    job.format.clone_from(&format);
     job.attrs = req
         .groups
         .iter()
@@ -959,10 +984,10 @@ fn submit_document(
     // Spool the document.
     let data = job::Job::data_path(&ctx.request_root, id, 1);
     if let Err(e) = std::fs::write(&data, &document) {
-        send_status(resp, status::ERROR_INTERNAL, &format!("spool write: {e}"));
+        send_status(resp, status::ERROR_INTERNAL, format!("spool write: {e}"));
         return;
     }
-    let filetype = sniff(&ctx.mime, &data, &format);
+    let filetype = sniff(ctx.mime, &data, &format);
     job.files.push(job::JobFile {
         num: 1,
         filetype,
@@ -986,7 +1011,7 @@ fn submit_document(
         resp,
         ctx.jobs
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .unwrap(),
         ctx,
@@ -1007,7 +1032,10 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
                 .and_then(attr_text)
         })
         .unwrap_or_else(|| "anonymous".into());
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let id = jobs.alloc_id();
     let mut job = Job::new(id, dest.clone(), user);
     job.state = job::JobState::PendingHeld; // awaiting documents
@@ -1038,7 +1066,7 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         resp,
         ctx.jobs
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .unwrap(),
         ctx,
@@ -1061,7 +1089,10 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         );
         return;
     };
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(job) = jobs.get_mut(id) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
@@ -1076,7 +1107,7 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         .find(tags::OPERATION, "document-format")
         .and_then(attr_text)
         .unwrap_or_else(|| job.format.clone());
-    let filetype = sniff(&ctx.mime, &data, &format);
+    let filetype = sniff(ctx.mime, &data, &format);
     job.files.push(job::JobFile {
         num,
         filetype,
@@ -1104,13 +1135,16 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     };
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if jobs.get(id).is_none() {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     }
     // A job already in a terminating state can't be canceled.
-    if jobs.get(id).map(|j| j.state.is_final()).unwrap_or(false) {
+    if jobs.get(id).is_some_and(|j| j.state.is_final()) {
         send_status(resp, status::ERROR_NOT_POSSIBLE, "Job already completed.");
         return;
     }
@@ -1119,8 +1153,7 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         j.completed_at = Some(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
+                .map_or(0, |d| d.as_secs() as i64),
         );
         let _ = j.save(&ctx.request_root);
     }
@@ -1148,7 +1181,10 @@ fn cancel_current_job(
         send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
         return;
     };
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(id) = jobs
         .for_printer(&dest)
         .find(|j| j.state == JobState::Processing)
@@ -1162,8 +1198,7 @@ fn cancel_current_job(
         j.completed_at = Some(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
+                .map_or(0, |d| d.as_secs() as i64),
         );
         let _ = j.save(&ctx.request_root);
         resp.code = status::OK;
@@ -1184,7 +1219,10 @@ fn get_documents(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         .find(tags::OPERATION, "document-number")
         .and_then(attr_int)
         .map(|n| n as u32);
-    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let jobs = ctx
+        .jobs
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(job) = jobs.get(id) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
@@ -1266,7 +1304,10 @@ fn suspend_current_job(
         send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
         return;
     };
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(id) = jobs
         .for_printer(&dest)
         .find(|j| j.state == JobState::Processing)
@@ -1290,7 +1331,10 @@ fn promote_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opt
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     };
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(j) = jobs.get_mut(id) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
@@ -1325,9 +1369,9 @@ fn identify_printer(
         send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
         return;
     };
-    let actions = req
-        .find(tags::OPERATION, "identify-actions")
-        .map(|a| {
+    let actions = req.find(tags::OPERATION, "identify-actions").map_or_else(
+        || "display".into(),
+        |a| {
             a.values
                 .iter()
                 .filter_map(|v| match v {
@@ -1336,8 +1380,8 @@ fn identify_printer(
                 })
                 .collect::<Vec<_>>()
                 .join(",")
-        })
-        .unwrap_or_else(|| "display".into());
+        },
+    );
     let name = p.name.clone();
     drop(reg);
     ctx.event(
@@ -1361,7 +1405,10 @@ fn get_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Op
         .and_then(attr_int)
         .unwrap_or(1)
         .max(1) as u32;
-    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let jobs = ctx
+        .jobs
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(job) = jobs.get(id) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
@@ -1383,8 +1430,7 @@ fn get_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Op
             let fmt = job
                 .files
                 .get((num - 1) as usize)
-                .map(|f| f.format.clone())
-                .unwrap_or_else(|| "application/octet-stream".into());
+                .map_or_else(|| "application/octet-stream".into(), |f| f.format.clone());
             let g = resp.group_mut(tags::OPERATION);
             g.attributes.push(Attribute::new(
                 "document-format",
@@ -1397,7 +1443,7 @@ fn get_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Op
             send_status(
                 resp,
                 status::ERROR_NOT_FOUND,
-                &format!("Cannot open document: {e}"),
+                format!("Cannot open document: {e}"),
             );
         }
     }
@@ -1416,7 +1462,10 @@ fn transition_job(
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     };
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(j) = jobs.get_mut(id) {
         j.state = to;
         if to == JobState::Pending {
@@ -1492,9 +1541,11 @@ fn cancel_my_jobs(
         .unwrap_or_default();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+        .map_or(0, |d| d.as_secs() as i64);
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for j in jobs.values_mut() {
         if j.username == user && !j.state.is_final() {
             j.state = JobState::Canceled;
@@ -1507,7 +1558,10 @@ fn cancel_my_jobs(
 
 /// `Purge-Jobs` — remove all jobs (admin op; upstream requires auth).
 fn purge_jobs(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, _uri_attr: Option<&Attribute>) {
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     for j in jobs.values_mut() {
         j.state = JobState::Canceled;
         let _ = j.save(&ctx.request_root);
@@ -1533,7 +1587,10 @@ fn cups_move_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         send_status(resp, status::ERROR_NOT_FOUND, "Destination not found.");
         return;
     }
-    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(j) = jobs.get_mut(id) {
         j.dest = dest;
         let _ = j.save(&ctx.request_root);
@@ -1555,7 +1612,10 @@ fn get_job_attributes(
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     };
-    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let jobs = ctx
+        .jobs
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(job) = jobs.get(id) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
@@ -1578,16 +1638,15 @@ fn validate_accepting(
     };
     let (name, accepting) = {
         let reg = ctx.reg();
-        match reg.validate_dest(&uri) {
-            Some((p, _)) => (p.name.clone(), p.accepting),
-            None => {
-                send_status(
-                    resp,
-                    status::ERROR_NOT_FOUND,
-                    "The printer or class does not exist.",
-                );
-                return None;
-            }
+        if let Some((p, _)) = reg.validate_dest(&uri) {
+            (p.name.clone(), p.accepting)
+        } else {
+            send_status(
+                resp,
+                status::ERROR_NOT_FOUND,
+                "The printer or class does not exist.",
+            );
+            return None;
         }
     };
     if !accepting {
@@ -1625,8 +1684,7 @@ fn sniff(mime: &mime_db::MimeDb, path: &std::path::Path, declared: &str) -> Stri
         .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
         .unwrap_or(0);
     mime.detect(path.to_str().unwrap_or(""), &head[..n])
-        .map(|t| t.name())
-        .unwrap_or_else(|| declared.into())
+        .map_or_else(|| declared.into(), mime_db::Type::name)
 }
 
 /// Emit a `job` attribute group into `resp` for `job` (`cupsdCopyJob`).
@@ -1699,17 +1757,18 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx, ra: &Option<Vec<St
     add(
         "job-more-info",
         tags::URI,
-        Value::Uri(
-            format!("http://{}:{}/jobs/{}", ctx.hostname, ctx.port, job.id).into(),
-        ),
+        Value::Uri(format!("http://{}:{}/jobs/{}", ctx.hostname, ctx.port, job.id).into()),
     );
     let now_s = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i32)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i32);
     add("job-printer-up-time", tags::INTEGER, Value::Integer(now_s));
     if job.state as i32 > JobState::Processing as i32 {
-        add("job-preserved", tags::BOOLEAN, Value::Boolean(!job.files.is_empty()));
+        add(
+            "job-preserved",
+            tags::BOOLEAN,
+            Value::Boolean(!job.files.is_empty()),
+        );
     }
     add(
         "time-at-creation",
@@ -1752,10 +1811,10 @@ fn get_devices(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         // `class uri "make-model" "info" ["device-id"]`
         let mut it = line.splitn(3, ' ');
-        let (Some(class_), Some(uri), rest) = (it.next(), it.next(), it.next()) else {
+        let (Some(class_), Some(uri), body) = (it.next(), it.next(), it.next()) else {
             continue;
         };
-        let q = quoted_fields(rest.unwrap_or(""));
+        let q = quoted_fields(body.unwrap_or(""));
         let (mm, info, devid) = (
             q.first().cloned().unwrap_or_default(),
             q.get(1).cloned().unwrap_or_default(),
@@ -1840,11 +1899,10 @@ fn get_ppds(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     let limit = int_attr(req, "limit").unwrap_or(0).to_string();
     // PPD + .drv roots sit beside `ServerBin` by convention (`{base}/ppd`,
     // `{base}/drv`) — upstream installs them under `DataDir`.
-    let base = ctx
-        .server_bin
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    let base = ctx.server_bin.parent().map_or_else(
+        || std::path::PathBuf::from("/usr/share"),
+        std::path::Path::to_path_buf,
+    );
     let out = std::process::Command::new(&driverd)
         .args(["list", "0", &limit, opts.trim()])
         .env("PPDDIR", base.join("ppd"))
@@ -1857,10 +1915,10 @@ fn get_ppds(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     resp.code = status::OK;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         // `ppd "name" "make-and-model" "device-id" "product" "psversion" "scheme"`
-        let Some(rest) = line.strip_prefix("ppd ") else {
+        let Some(body) = line.strip_prefix("ppd ") else {
             continue;
         };
-        let q = quoted_fields(rest);
+        let q = quoted_fields(body);
         let name = q.first().cloned().unwrap_or_default();
         if name.is_empty() {
             continue;
@@ -1869,18 +1927,39 @@ fn get_ppds(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         let g = resp.new_group_mut(tags::PRINTER);
         let attrs = [
             ("ppd-name", tags::NAME, name.clone()),
-            ("ppd-make-and-model", tags::TEXT, q.get(1).cloned().unwrap_or_default()),
-            ("ppd-device-id", tags::TEXT, q.get(2).cloned().unwrap_or_default()),
-            ("ppd-product", tags::TEXT, q.get(3).cloned().unwrap_or_default()),
-            ("ppd-psversion", tags::TEXT, q.get(4).cloned().unwrap_or_default()),
-            ("ppd-type", tags::KEYWORD, q.get(5).cloned().unwrap_or_default()),
+            (
+                "ppd-make-and-model",
+                tags::TEXT,
+                q.get(1).cloned().unwrap_or_default(),
+            ),
+            (
+                "ppd-device-id",
+                tags::TEXT,
+                q.get(2).cloned().unwrap_or_default(),
+            ),
+            (
+                "ppd-product",
+                tags::TEXT,
+                q.get(3).cloned().unwrap_or_default(),
+            ),
+            (
+                "ppd-psversion",
+                tags::TEXT,
+                q.get(4).cloned().unwrap_or_default(),
+            ),
+            (
+                "ppd-type",
+                tags::KEYWORD,
+                q.get(5).cloned().unwrap_or_default(),
+            ),
             ("ppd-natural-language", tags::LANGUAGE, "en".to_string()),
         ];
         for (an, tag, av) in attrs {
             if av.is_empty() {
                 continue;
             }
-            g.attributes.push(Attribute::new(an, tag, vec![scalar_value(tag, av.clone())]));
+            g.attributes
+                .push(Attribute::new(an, tag, vec![scalar_value(tag, av.clone())]));
         }
     }
 }
@@ -1906,24 +1985,18 @@ fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
                         p.options
                             .iter()
                             .find(|(n, _)| n.eq_ignore_ascii_case("ppd-name"))
-                            .map(|(_, v)| v.clone())
-                            .unwrap_or_else(|| "everywhere".to_string())
+                            .map_or_else(|| "everywhere".to_string(), |(_, v)| v.clone())
                     })
                 })
         });
     let Some(name) = name else {
-        send_status(
-            resp,
-            status::ERROR_NOT_FOUND,
-            "No PPD name or printer PPD.",
-        );
+        send_status(resp, status::ERROR_NOT_FOUND, "No PPD name or printer PPD.");
         return;
     };
-    let base = ctx
-        .server_bin
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
+    let base = ctx.server_bin.parent().map_or_else(
+        || std::path::PathBuf::from("/usr/share"),
+        std::path::Path::to_path_buf,
+    );
     let out = std::process::Command::new(&driverd)
         .args(["cat", &name])
         .env("PPDDIR", base.join("ppd"))
@@ -1934,7 +2007,11 @@ fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             resp.code = status::OK;
             resp.document = o.stdout;
         }
-        _ => send_status(resp, status::ERROR_NOT_FOUND, format!("PPD \"{name}\" not found.")),
+        _ => send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            format!("PPD \"{name}\" not found."),
+        ),
     }
 }
 
@@ -2208,7 +2285,11 @@ fn create_local_printer(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             "printer-uri-supported",
             tags::URI,
             Value::Uri(
-                format!("{scheme}://{}:{}/printers/{}", ctx.hostname, ctx.port, p.name).into(),
+                format!(
+                    "{scheme}://{}:{}/printers/{}",
+                    ctx.hostname, ctx.port, p.name
+                )
+                .into(),
             ),
         );
     }
@@ -2339,7 +2420,9 @@ fn set_accepting(
         return;
     };
     p.accepting = accepting;
-    if !accepting {
+    if accepting {
+        p.reasons.clear();
+    } else {
         if let Some(r) = req
             .find(tags::OPERATION, "printer-state-message")
             .and_then(attr_text)
@@ -2356,8 +2439,6 @@ fn set_accepting(
                 })
                 .collect();
         }
-    } else {
-        p.reasons.clear();
     }
     drop(reg);
     save_printers(ctx);
@@ -2518,12 +2599,9 @@ fn create_subscription(
     ctx: &Ctx,
     uri_attr: Option<&Attribute>,
 ) {
-    let events = match notify_events(req) {
-        Some(e) => e,
-        None => {
-            send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-events.");
-            return;
-        }
+    let Some(events) = notify_events(req) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-events.");
+        return;
     };
     let job_sub = req.code == op::CREATE_JOB_SUBSCRIPTIONS;
     let (printer, job_id) = if job_sub {
@@ -2779,11 +2857,7 @@ fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
                     tags::URI,
                     Value::Uri(format!("{scheme}://{host}:{port}/printers/{p}").into()),
                 );
-                add(
-                    "printer-name",
-                    tags::NAME,
-                    Value::Name(p.clone().into()),
-                );
+                add("printer-name", tags::NAME, Value::Name(p.clone().into()));
             }
             if let Some(j) = n.job_id {
                 add("notify-job-id", tags::INTEGER, Value::Integer(j));

@@ -89,16 +89,16 @@ pub fn report(class_: &str, uri: &str, make_model: &str, info: &str, device_id: 
 pub fn debug(args: std::fmt::Arguments<'_>) {
     eprintln!("DEBUG: {args}");
 }
-/// `INFO:` line on stderr → error_log.
+/// `INFO:` line on stderr → `error_log`.
 pub fn info(args: std::fmt::Arguments<'_>) {
     eprintln!("INFO: {args}");
 }
-/// `ERROR:` line on stderr → error_log.
+/// `ERROR:` line on stderr → `error_log`.
 pub fn error(args: std::fmt::Arguments<'_>) {
     eprintln!("ERROR: {args}");
 }
 
-/// Run a backend main: `discover()` when argv.len()<6, else `print(inv)`.
+/// Run a backend main: `discover()` when `argv.len()`<6, else `print(inv)`.
 /// `print` returns a `CUPS_BACKEND_*` code.
 pub fn run<D, P>(discover: D, print: P) -> !
 where

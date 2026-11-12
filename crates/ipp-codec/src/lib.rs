@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn fuzz_smoke_no_panics() {
         // Cheap determinism: feed byte permutations; must error, not panic.
-        let mut state = 0x12345678u64;
+        let mut state = 0x1234_5678u64;
         let mut rng = move || {
             state ^= state << 13;
             state ^= state >> 7;
@@ -501,10 +501,10 @@ mod tests {
             state
         };
         for _ in 0..20_000 {
-            let len = (rng() % 64) as usize;
+            let len = usize::try_from(rng() % 64).unwrap_or(0);
             let mut buf = Vec::with_capacity(len);
             for _ in 0..len {
-                buf.push((rng() % 256) as u8);
+                buf.push(u8::try_from(rng() % 256).unwrap_or(0));
             }
             let _ = decode(&buf);
         }

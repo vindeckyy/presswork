@@ -3,11 +3,10 @@
 # unvetted dependency sources.
 
 [advisories]
-# Fail on any known-vulnerable dependency version.
-vulnerability = "deny"
-unmaintained = "warn"
+# Known-vulnerable dependency versions always fail (implicit in 0.20);
+# these gates cover unmaintained crates and yanked versions.
+unmaintained = "workspace"
 yanked = "deny"
-notice = "warn"
 ignore = []
 
 [licenses]
@@ -25,14 +24,14 @@ allow = [
     "Zlib",
     "CC0-1.0",
 ]
-copyleft = "deny"
-default = "deny"
 private = { ignore = true }
 
 [bans]
 # No duplicate major versions without an explicit skip.
 multiple-versions = "warn"
-wildcards = "deny"
+# Internal members are `path`-only deps (no version req) which read as
+# "wildcards"; warn so real `*` ranges on published crates still surface.
+wildcards = "warn"
 deny = []
 skip = []
 

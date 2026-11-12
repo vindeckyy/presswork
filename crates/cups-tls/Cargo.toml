@@ -12,4 +12,3 @@ workspace = true
 rcgen = "0.14.7"
 rustls = "0.23.46"
 tokio-rustls = "0.26.6"
-rustls-pemfile = "2"

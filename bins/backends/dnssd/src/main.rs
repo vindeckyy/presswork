@@ -33,14 +33,13 @@ fn main() {
         |inv| {
             // Print — resolve the dnssd:// service to ipp:// and hand off.
             let uri = inv.device_uri.as_str();
-            match dnssd::resolve_uri(uri, Duration::from_secs(3)) {
-                Some(real) => forward(&args, &real),
-                None => {
-                    backend_common::error(format_args!(
-                        "dnssd: could not resolve {uri} to an IPP address"
-                    ));
-                    backend_common::code::FAILED
-                }
+            if let Some(real) = dnssd::resolve_uri(uri, Duration::from_secs(3)) {
+                forward(&args, &real)
+            } else {
+                backend_common::error(format_args!(
+                    "dnssd: could not resolve {uri} to an IPP address"
+                ));
+                backend_common::code::FAILED
             }
         },
     );

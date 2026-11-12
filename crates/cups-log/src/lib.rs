@@ -135,7 +135,10 @@ impl Sink {
             let _ = writeln!(std::io::stderr(), "{line}");
             return true;
         }
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.is_none() {
             match std::fs::OpenOptions::new()
                 .create(true)
@@ -153,6 +156,7 @@ impl Sink {
 }
 
 /// `cupsdWriteErrorLog()` — `L [time] message`.
+#[must_use]
 pub fn error_line(level: Level, tf: TimeFormat, message: &str) -> String {
     format!("{} {} {}", level.letter(), datetime(tf), message)
 }
@@ -163,6 +167,7 @@ pub fn error_line(level: Level, tf: TimeFormat, message: &str) -> String {
 /// `version` is `HttpVersion` as `(major*100 + minor*100)`-style
 /// numbers upstream uses (`version / 100`, `version % 100` → "1.1").
 #[must_use]
+#[allow(clippy::too_many_arguments)] // fixed cupsdLogRequest signature
 pub fn access_line(
     host: &str,
     user: Option<&str>,
@@ -202,12 +207,14 @@ pub fn access_line(
 /// `_httpEncodeURI` — escape `"` and control/unsafe chars for the
 /// quoted request field (upstream escapes `%`, `"`, space, controls).
 fn encode_uri(uri: &str) -> String {
+    use std::fmt::Write as _;
     let mut out = String::with_capacity(uri.len() + 8);
     for b in uri.bytes() {
         match b {
-            b'"' | b'\\' | b'%' => out.push_str(&format!("%{b:02X}")),
+            b'"' | b'\\' | b'%' | 0x00..=0x1f | 0x7f..=0xff => {
+                let _ = write!(out, "%{b:02X}");
+            }
             0x20 => out.push('+'),
-            0..=0x1f | 0x7f..=0xff => out.push_str(&format!("%{b:02X}")),
             _ => out.push(b as char),
         }
     }
@@ -244,7 +251,7 @@ pub fn page_line(
             continue;
         }
         match it.next() {
-            Some('%') => out.push('%'),
+            Some('%') | None => out.push('%'),
             Some('p') => out.push_str(printer),
             Some('j') => {
                 let _ = write!(out, "{job_id}");
@@ -310,7 +317,6 @@ pub fn page_line(
                 out.push('%');
                 out.push(other);
             }
-            None => out.push('%'),
         }
     }
     out
