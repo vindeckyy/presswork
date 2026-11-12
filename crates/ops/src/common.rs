@@ -141,7 +141,7 @@ fn is_job_template(name: &str) -> bool {
 /// The list may name individual attributes *or* an attribute group:
 /// `all` (everything), `printer-description` (non-template attrs),
 /// `job-template` (job-template attrs), `printer-defaults`, …
-fn wants(ra: &Option<Vec<String>>, name: &str) -> bool {
+pub fn wants(ra: &Option<Vec<String>>, name: &str) -> bool {
     ra.as_ref().is_none_or(|ra| {
         ra.iter().any(|n| {
             n == name
@@ -1282,6 +1282,15 @@ pub fn common_data(ctx: &Ctx) -> Vec<Attribute> {
         "printer-alert-description",
         tags::TEXT,
         Value::Text("ready".into()),
+    );
+    addn(
+        &mut v,
+        "reference-uri-schemes-supported",
+        tags::URISCHEME,
+        ["file", "ftp", "http", "https", "ipp", "ipps"]
+            .iter()
+            .map(|s| Value::UriScheme((*s).into()))
+            .collect(),
     );
     add1(
         &mut v,

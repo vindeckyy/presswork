@@ -5,7 +5,7 @@ use job::{Job, JobState, Jobs};
 use printer::{ptype, Printer, Registry};
 use std::sync::RwLock;
 
-use crate::common::{copy_printer_attrs, new_response, requested_attrs, send_status};
+use crate::common::{copy_printer_attrs, new_response, requested_attrs, send_status, wants};
 
 /// Per-request context — the pieces of global server state handlers
 /// consult (the `con`/`cupsd` globals in the C scheduler).
@@ -780,11 +780,32 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         .filter(|l| *l > 0)
         .map(|l| l as usize)
         .unwrap_or(usize::MAX);
+    // `my-jobs` restricts the listing to the requesting user's jobs.
+    let my_jobs = req
+        .find(tags::OPERATION, "my-jobs")
+        .and_then(|a| matches!(a.first(), Some(Value::Boolean(b)) if *b).then_some(()))
+        .is_some();
+    let my_user = if my_jobs {
+        ctx.requesting_user.clone().or_else(|| {
+            req.find(tags::OPERATION, "requesting-user-name")
+                .and_then(attr_text)
+        })
+    } else {
+        None
+    };
     let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    // `requested-attributes` absent → the RFC default is just
+    // `job-id`+`job-uri`, not the full attribute set.
+    let ra = requested_attrs(req).or_else(|| Some(vec!["job-id".into(), "job-uri".into()]));
     let mut emitted = 0;
     for j in jobs.for_printer(&p.name) {
         if emitted >= limit {
             break;
+        }
+        if let Some(u) = &my_user {
+            if &j.username != u {
+                continue;
+            }
         }
         let done = j.state.is_final();
         let emit = match which.as_str() {
@@ -793,7 +814,7 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
             _ => !done, // "not-completed" default
         };
         if emit {
-            add_job_group(resp, j, ctx);
+            add_job_group(resp, j, ctx, &ra);
             emitted += 1;
         }
     }
@@ -969,6 +990,7 @@ fn submit_document(
             .get(id)
             .unwrap(),
         ctx,
+        &requested_attrs(req),
     );
 }
 
@@ -1020,6 +1042,7 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
             .get(id)
             .unwrap(),
         ctx,
+        &requested_attrs(req),
     );
 }
 
@@ -1063,7 +1086,7 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
     }
     let _ = jobs.save(&ctx.request_root, id);
     resp.code = status::OK;
-    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(req));
 }
 
 /// `cancel_job()` — cancel + purge a job (state -> canceled, files removed).
@@ -1088,7 +1111,7 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         let _ = j.save(&ctx.request_root);
     }
     resp.code = status::OK;
-    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(req));
 }
 
 /// `cancel_current_job()` — Cancel-Current-Job: cancel the job a printer
@@ -1130,7 +1153,7 @@ fn cancel_current_job(
         );
         let _ = j.save(&ctx.request_root);
         resp.code = status::OK;
-        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+        add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(_req));
     }
 }
 
@@ -1242,7 +1265,7 @@ fn suspend_current_job(
         j.state = JobState::ProcessingStopped;
         let _ = j.save(&ctx.request_root);
         resp.code = status::OK;
-        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+        add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(_req));
     }
 }
 
@@ -1261,7 +1284,7 @@ fn promote_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opt
     j.priority = 100;
     let _ = j.save(&ctx.request_root);
     resp.code = status::OK;
-    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(req));
 }
 
 /// `identify_printer()` — Identify-Printer: run the requested
@@ -1354,7 +1377,7 @@ fn get_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Op
                 tags::MIMETYPE,
                 vec![Value::MimeMediaType(fmt.into())],
             ));
-            add_job_group(resp, job, ctx);
+            add_job_group(resp, job, ctx, &requested_attrs(req));
         }
         Err(e) => {
             send_status(
@@ -1387,7 +1410,7 @@ fn transition_job(
         }
         let _ = j.save(&ctx.request_root);
         resp.code = status::OK;
-        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+        add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(req));
     } else {
         send_status(resp, status::ERROR_NOT_FOUND, done_msg);
     }
@@ -1501,7 +1524,7 @@ fn cups_move_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         j.dest = dest;
         let _ = j.save(&ctx.request_root);
         resp.code = status::OK;
-        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+        add_job_group(resp, jobs.get(id).unwrap(), ctx, &requested_attrs(req));
     } else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
     }
@@ -1524,7 +1547,7 @@ fn get_job_attributes(
         return;
     };
     resp.code = status::OK;
-    add_job_group(resp, job, ctx);
+    add_job_group(resp, job, ctx, &requested_attrs(req));
 }
 
 // ---------- job helpers ----------
@@ -1593,10 +1616,10 @@ fn sniff(mime: &mime_db::MimeDb, path: &std::path::Path, declared: &str) -> Stri
 }
 
 /// Emit a `job` attribute group into `resp` for `job` (`cupsdCopyJob`).
-fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx) {
+fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx, ra: &Option<Vec<String>>) {
     let g = resp.group_mut(tags::JOB);
     let mut add = |name: &str, tag: u8, v: Value| {
-        if g.find(name).is_none() {
+        if wants(ra, name) && g.find(name).is_none() {
             g.attributes.push(Attribute::new(name, tag, vec![v]));
         }
     };
