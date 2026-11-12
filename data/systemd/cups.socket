@@ -1,0 +1,12 @@
+[Unit]
+Description=CUPS Scheduler
+PartOf=cups.service
+
+[Socket]
+ListenStream=/run/cups/cups.sock
+ListenStream=631
+BindIPv6Only=both
+ReusePort=true
+
+[Install]
+WantedBy=sockets.target
