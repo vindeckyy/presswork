@@ -512,6 +512,21 @@ fn stored_attrs(p: &Printer, _ctx: &Ctx) -> Vec<Attribute> {
         tags::URI,
         Value::Uri(p.device_uri.as_str().into()),
     );
+    // `printer-device-id` is per-queue — a stored `Option printer-device-id`
+    // (set by driver selection / Set-Printer-Attributes) wins over the
+    // driverless default.
+    let devid = p
+        .options
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("printer-device-id"))
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| "MFG:presswork;MDL:ipp-everywhere;CMD:PWG-Raster;".into());
+    add1(
+        &mut v,
+        "printer-device-id",
+        tags::TEXT,
+        Value::Text(devid.into()),
+    );
     add1(&mut v, "finishings-supported", tags::ENUM, Value::Enum(3));
     add1(&mut v, "finishings-default", tags::ENUM, Value::Enum(3));
     add1(
@@ -1262,12 +1277,6 @@ pub fn common_data(ctx: &Ctx) -> Vec<Attribute> {
         "preferred-attributes-supported",
         tags::BOOLEAN,
         Value::Boolean(true),
-    );
-    add1(
-        &mut v,
-        "printer-device-id",
-        tags::TEXT,
-        Value::Text("MFG:presswork;MDL:ipp-everywhere;CMD:PWG-Raster;".into()),
     );
     add1(
         &mut v,

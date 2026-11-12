@@ -1792,15 +1792,17 @@ fn get_ppds(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         }
     }
     let limit = int_attr(req, "limit").unwrap_or(0).to_string();
+    // PPD + .drv roots sit beside `ServerBin` by convention (`{base}/ppd`,
+    // `{base}/drv`) — upstream installs them under `DataDir`.
+    let base = ctx
+        .server_bin
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
     let out = std::process::Command::new(&driverd)
         .args(["list", "0", &limit, opts.trim()])
-        .env(
-            "PPDDIR",
-            ctx.server_bin
-                .parent()
-                .map(|p| p.join("ppd").to_string_lossy().into_owned())
-                .unwrap_or_else(|| "/usr/share/ppd".into()),
-        )
+        .env("PPDDIR", base.join("ppd"))
+        .env("DRVROOT", base.join("drv"))
         .output();
     let Ok(out) = out else {
         send_status(resp, status::ERROR_INTERNAL, "cannot run cups-driverd");
@@ -1851,7 +1853,16 @@ fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             req.find(tags::OPERATION, "printer-uri")
                 .and_then(attr_text)
                 .and_then(|u| {
-                    ctx.reg().validate_dest(&u).map(|_| "everywhere".to_string())
+                    let reg = ctx.reg();
+                    reg.validate_dest(&u).map(|(p, _)| {
+                        // The queue's stored `ppd-name` option (driver
+                        // selection) wins; bare queues use `everywhere`.
+                        p.options
+                            .iter()
+                            .find(|(n, _)| n.eq_ignore_ascii_case("ppd-name"))
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or_else(|| "everywhere".to_string())
+                    })
                 })
         });
     let Some(name) = name else {
@@ -1862,8 +1873,15 @@ fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         );
         return;
     };
+    let base = ctx
+        .server_bin
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share"));
     let out = std::process::Command::new(&driverd)
         .args(["cat", &name])
+        .env("PPDDIR", base.join("ppd"))
+        .env("DRVROOT", base.join("drv"))
         .output();
     match out {
         Ok(o) if o.status.success() => {
@@ -2068,6 +2086,23 @@ fn create_local_printer(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         .and_then(attr_text)
         .unwrap_or_else(|| "file:///dev/null".into());
     let mut p = Printer::new(name.clone(), device_uri);
+    // Driver selection: an explicit `ppd-name`, a `device-id` (1284 string the
+    // backend reported), or `ppd-make`. Store the binding on the queue so
+    // `CUPS-Get-PPD`/`Get-Printer-Attributes` reflect the chosen driver.
+    if let Some(ppd) = attr("ppd-name").and_then(attr_text) {
+        p.options.push(("ppd-name".into(), ppd));
+    }
+    if let Some(devid) = attr("printer-device-id")
+        .and_then(attr_text)
+        .or_else(|| attr("device-id").and_then(attr_text))
+    {
+        p.options.push(("printer-device-id".into(), devid));
+    }
+    if let Some(mk) = attr("ppd-make").and_then(attr_text) {
+        if p.make_model.is_none() {
+            p.make_model = Some(mk);
+        }
+    }
     if let Some(v) = attr("printer-info").and_then(attr_text) {
         p.info = Some(v);
     }
