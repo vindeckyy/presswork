@@ -172,6 +172,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         .request_root
         .clone()
         .unwrap_or_else(|| "/var/spool/cups".into());
+    let subs = Arc::new(std::sync::RwLock::new(events::Subscriptions::new()));
     let jobs = Arc::new(std::sync::RwLock::new(job::Jobs::load_all(
         std::path::Path::new(&request_root),
     )));
@@ -254,6 +255,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         log.clone(),
                         jobs.clone(),
                         mime.clone(),
+                        subs.clone(),
                         server_root.clone(),
                     ));
                 }
@@ -279,6 +281,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         log.clone(),
                         jobs.clone(),
                         mime.clone(),
+                        subs.clone(),
                         server_root.clone(),
                     ));
                 }
@@ -339,6 +342,7 @@ async fn accept_tcp(
     log: Arc<Logs>,
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
+    subs: Arc<std::sync::RwLock<events::Subscriptions>>,
     server_root: Arc<PathBuf>,
 ) {
     loop {
@@ -354,6 +358,7 @@ async fn accept_tcp(
                 let log = log.clone();
                 let jobs = jobs.clone();
                 let mime = mime.clone();
+                let subs = subs.clone();
                 let server_root = server_root.clone();
                 let client_addr = peer.ip();
                 let tls = tls.clone();
@@ -370,6 +375,7 @@ async fn accept_tcp(
                         host,
                         jobs,
                         mime,
+                        subs,
                         server_root,
                         client_addr,
                         tls,
@@ -396,6 +402,7 @@ async fn accept_unix(
     log: Arc<Logs>,
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
+    subs: Arc<std::sync::RwLock<events::Subscriptions>>,
     server_root: Arc<PathBuf>,
 ) {
     loop {
@@ -408,6 +415,7 @@ async fn accept_unix(
                 let log = log.clone();
                 let jobs = jobs.clone();
                 let mime = mime.clone();
+                let subs = subs.clone();
                 let server_root = server_root.clone();
                 let tls = tls.clone();
                 tokio::spawn(async move {
@@ -423,6 +431,7 @@ async fn accept_unix(
                         "localhost".to_string(),
                         jobs,
                         mime,
+                        subs,
                         server_root,
                         std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                         tls,
@@ -451,6 +460,7 @@ async fn serve_one<S>(
     host: String,
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
+    subs: Arc<std::sync::RwLock<events::Subscriptions>>,
     server_root: Arc<PathBuf>,
     client_addr: std::net::IpAddr,
     tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
@@ -478,6 +488,7 @@ async fn serve_one<S>(
                         host: &host,
                         jobs: &jobs,
                         mime: &mime,
+                        subs: &subs,
                         server_root: server_root.as_path(),
                         client_addr,
                     },
@@ -503,6 +514,7 @@ async fn serve_one<S>(
                 &host,
                 &jobs,
                 &mime,
+                &subs,
                 &server_root,
                 client_addr,
                 false,
@@ -532,6 +544,7 @@ async fn serve_one<S>(
                         host: &host,
                         jobs: &jobs,
                         mime: &mime,
+                        subs: &subs,
                         server_root: server_root.as_path(),
                         client_addr,
                     },
@@ -553,6 +566,7 @@ struct ConnArgs<'a> {
     host: &'a str,
     jobs: &'a Arc<std::sync::RwLock<job::Jobs>>,
     mime: &'a Arc<mime_db::MimeDb>,
+    subs: &'a Arc<std::sync::RwLock<events::Subscriptions>>,
     server_root: &'a Path,
     client_addr: std::net::IpAddr,
 }
@@ -574,6 +588,7 @@ where
             a.host,
             a.jobs,
             a.mime,
+            a.subs,
             a.server_root,
             a.client_addr,
             encrypted,
@@ -611,6 +626,7 @@ fn dispatch_req(
     host: &str,
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     mime: &Arc<mime_db::MimeDb>,
+    subs: &Arc<std::sync::RwLock<events::Subscriptions>>,
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
     encrypted: bool,
@@ -636,6 +652,7 @@ fn dispatch_req(
                 host,
                 jobs,
                 mime,
+                subs,
                 server_root,
                 client_addr,
                 encrypted,
@@ -725,6 +742,7 @@ fn ipp_dispatch(
     host: &str,
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     mime: &Arc<mime_db::MimeDb>,
+    subs: &Arc<std::sync::RwLock<events::Subscriptions>>,
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
     encrypted: bool,
@@ -734,7 +752,7 @@ fn ipp_dispatch(
         return Response::status(StatusCode::BAD_REQUEST);
     };
     let document = &req.body.as_bytes()[consumed..];
-    let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref());
+    let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref(), subs.as_ref());
     ctx.is_local = local;
     ctx.is_encrypted = encrypted;
     // httpGetHostname: prefer the request's Host header for generated URIs.
@@ -759,7 +777,7 @@ fn ipp_dispatch(
     // Scheduler tick: pick next pending job on an idle printer and spawn
     // its filter->backend pipeline (mirrors start_job being driven by the
     // scheduler's event loop).
-    schedule_tick(jobs, registry, mime, cfg, log);
+    schedule_tick(jobs, subs, registry, mime, cfg, log);
     let op_name = ipp_codec::ops::op::name(msg.code);
     let status_name = ipp_codec::ops::status::name(resp.code);
     match ipp_codec::encode(&resp) {
@@ -777,6 +795,7 @@ fn ipp_dispatch(
 /// watcher thread that marks the job completed/aborted on exit.
 fn schedule_tick(
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
+    subs: &Arc<std::sync::RwLock<events::Subscriptions>>,
     registry: &std::sync::RwLock<Registry>,
     mime: &mime_db::MimeDb,
     cfg: &Config,
@@ -865,6 +884,7 @@ fn schedule_tick(
                 format!("[Job {job_id}] Started backend (PID {})", pipe.backend.id()),
             );
             let jobs = jobs.clone();
+            let subs = subs.clone();
             let log = log.clone();
             std::thread::spawn(move || {
                 let status = pipe.backend.wait();
@@ -890,6 +910,23 @@ fn schedule_tick(
                     j.backend_pid = None;
                     j.completed_at = Some(job::now());
                     let _ = j.save(&request_root);
+                    let ev = if ok {
+                        events::Event::JobCompleted
+                    } else {
+                        events::Event::JobStopped
+                    };
+                    let dest = j.dest.clone();
+                    subs.write().unwrap_or_else(|e| e.into_inner()).push(
+                        ev,
+                        Some(&dest),
+                        Some(job_id),
+                        Some(match j.state {
+                            job::JobState::Completed => 9,
+                            job::JobState::Aborted => 7,
+                            _ => 8,
+                        }),
+                        format!("Job {job_id} {}.", if ok { "completed" } else { "aborted" }),
+                    );
                 }
                 log.err(
                     if ok {

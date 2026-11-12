@@ -77,6 +77,23 @@ pub struct Ctx<'a> {
     pub policy_defs: &'a [cups_config::Policy],
     /// `SystemGroup` names (`@SYSTEM` maps here).
     pub system_groups: Vec<String>,
+    /// IPP event subscriptions (`Subscriptions` global).
+    pub subscriptions: &'a RwLock<events::Subscriptions>,
+}
+
+impl Ctx<'_> {
+    /// Read guard on the subscription table.
+    pub fn subs(&self) -> std::sync::RwLockReadGuard<'_, events::Subscriptions> {
+        self.subscriptions.read().unwrap_or_else(|e| e.into_inner())
+    }
+    /// Write guard on the subscription table.
+    pub fn subs_write(&self) -> std::sync::RwLockWriteGuard<'_, events::Subscriptions> {
+        self.subscriptions.write().unwrap_or_else(|e| e.into_inner())
+    }
+    /// Emit an event to all covering subscriptions.
+    pub fn event(&self, ev: events::Event, printer: Option<&str>, job: Option<i32>, text: String) {
+        self.subs_write().push(ev, printer, job, None, text);
+    }
 }
 
 impl<'a> Ctx<'a> {
@@ -98,6 +115,7 @@ impl<'a> Ctx<'a> {
         port: u16,
         jobs: &'a RwLock<Jobs>,
         mime: &'a mime_db::MimeDb,
+        subscriptions: &'a RwLock<events::Subscriptions>,
     ) -> Self {
         let mut ops: Vec<i32> = vec![
             i32::from(op::PRINT_JOB),
@@ -201,6 +219,7 @@ impl<'a> Ctx<'a> {
             client_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             user_groups: Vec::new(),
             system_groups: cfg.files.system_group_names.clone(),
+            subscriptions,
         }
     }
 }
@@ -309,6 +328,11 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
             || x == op::CUPS_GET_CLASSES
             || x == op::CUPS_GET_DEVICES
             || x == op::CUPS_GET_PPDS
+            || x == op::GET_NOTIFICATIONS
+            || x == op::GET_SUBSCRIPTIONS
+            || x == op::GET_SUBSCRIPTION_ATTRIBUTES
+            || x == op::RENEW_SUBSCRIPTION
+            || x == op::CANCEL_SUBSCRIPTION
     );
     let uri_attr = if needs_uri {
         match req
@@ -370,6 +394,18 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
             set_printer_attributes(req, resp, ctx, uri_attr)
         }
         x if x == u32::from(op::CUPS_GET_DEVICES) => get_devices(req, resp, ctx),
+        x if x == u32::from(op::CREATE_PRINTER_SUBSCRIPTIONS)
+            || x == u32::from(op::CREATE_JOB_SUBSCRIPTIONS) =>
+        {
+            create_subscription(req, resp, ctx, uri_attr)
+        }
+        x if x == u32::from(op::GET_SUBSCRIPTIONS) => get_subscriptions(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::GET_SUBSCRIPTION_ATTRIBUTES) => {
+            get_subscription_attrs(req, resp, ctx)
+        }
+        x if x == u32::from(op::RENEW_SUBSCRIPTION) => renew_subscription(req, resp, ctx),
+        x if x == u32::from(op::CANCEL_SUBSCRIPTION) => cancel_subscription(req, resp, ctx),
+        x if x == u32::from(op::GET_NOTIFICATIONS) => get_notifications(req, resp, ctx),
         x if x == u32::from(op::CUPS_GET_PPDS) => {
             send_status(
                 resp,
@@ -731,8 +767,10 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
         send_status(resp, status::ERROR_INTERNAL, "cannot save job");
         return;
     }
+    drop(jobs);
+    ctx.event(events::Event::JobCreated, Some(&dest), Some(id), format!("Job {id} created."));
     resp.code = status::OK;
-    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    add_job_group(resp, ctx.jobs.read().unwrap_or_else(|e| e.into_inner()).get(id).unwrap(), ctx);
 }
 
 /// `create_job()` — allocates an empty job awaiting Send-Document(s).
@@ -767,8 +805,10 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         send_status(resp, status::ERROR_INTERNAL, "cannot save job");
         return;
     }
+    drop(jobs);
+    ctx.event(events::Event::JobCreated, Some(&dest), Some(id), format!("Job {id} created."));
     resp.code = status::OK;
-    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    add_job_group(resp, ctx.jobs.read().unwrap_or_else(|e| e.into_inner()).get(id).unwrap(), ctx);
 }
 
 /// `send_document()` — attach a document to an existing Create-Job job.
@@ -1188,6 +1228,12 @@ fn add_modify_printer(
     reg.add(p);
     drop(reg);
     save_printers(ctx);
+    ctx.event(
+        if exists { events::Event::PrinterModified } else { events::Event::PrinterAdded },
+        Some(&name),
+        None,
+        format!("Printer {name} {}.", if exists { "modified" } else { "added" }),
+    );
     resp.code = status::OK;
 }
 
@@ -1215,6 +1261,12 @@ fn delete_printer(
     }
     drop(reg);
     save_printers(ctx);
+    ctx.event(
+        events::Event::PrinterDeleted,
+        Some(&name),
+        None,
+        format!("Printer {name} deleted."),
+    );
     resp.code = status::OK;
 }
 
@@ -1267,6 +1319,12 @@ fn set_printer_state(
     p.state_time = printer::now();
     drop(reg);
     save_printers(ctx);
+    ctx.event(
+        events::Event::PrinterStateChanged,
+        Some(&name),
+        None,
+        format!("Printer {name} state changed to {state}."),
+    );
     resp.code = status::OK;
 }
 
@@ -1410,4 +1468,250 @@ fn set_printer_attributes(
     drop(reg);
     save_printers(ctx);
     resp.code = status::OK;
+}
+
+// ==================== P5: IPP subscriptions ====================
+
+/// Printer/class name from a `printer-uri` — last `/printers|classes/` segment.
+fn dest_name(uri: &str) -> Option<String> {
+    for seg in ["/printers/", "/classes/"] {
+        if let Some(i) = uri.find(seg) {
+            return Some(uri[i + seg.len()..].split('?').next()?.to_string());
+        }
+    }
+    uri.rsplit('/').next().filter(|n| !n.is_empty()).map(str::to_string)
+}
+
+/// `notify-events` attr -> parsed Event mask. `None` when missing/invalid.
+fn notify_events(req: &IppMessage) -> Option<Vec<events::Event>> {
+    let a = req.find(tags::OPERATION, "notify-events")?;
+    let mut out = Vec::new();
+    for v in &a.values {
+        if let Value::Keyword(k) = v {
+            out.push(events::Event::from_name(k.as_str().as_ref())?);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// `requesting-user-name` from the op group (auth identity fallback).
+fn requesting_user(req: &IppMessage, ctx: &Ctx) -> String {
+    ctx.username
+        .clone()
+        .or_else(|| req.find(tags::OPERATION, "requesting-user-name").and_then(attr_text))
+        .unwrap_or_else(|| "anonymous".into())
+}
+
+/// `Create-{Printer,Job}-Subscriptions` — `create_subscription`.
+fn create_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let events = match notify_events(req) {
+        Some(e) => e,
+        None => {
+            send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-events.");
+            return;
+        }
+    };
+    let job_sub = req.code == op::CREATE_JOB_SUBSCRIPTIONS;
+    let (printer, job_id) = if job_sub {
+        let jid = int_attr(req, "job-id").map(|j| j as i32);
+        let dest = uri_attr.and_then(attr_text).and_then(|u| {
+            dest_name(&u)
+        });
+        (dest, jid)
+    } else {
+        (
+            uri_attr
+                .and_then(attr_text)
+                .and_then(|u| dest_name(&u)),
+            None,
+        )
+    };
+    let lease = int_attr(req, "notify-lease-duration")
+        .map(|l| l as i32)
+        .unwrap_or(events::NEVER_EXPIRE);
+    let user_data = req
+        .find(tags::OPERATION, "notify-user-data")
+        .and_then(|a| a.first())
+        .and_then(|v| match v {
+            Value::OctetString(b) => Some(b.clone()),
+            _ => None,
+        });
+    let owner = requesting_user(req, ctx);
+    let id = ctx
+        .subs_write()
+        .add(printer, job_id, events, owner, lease, user_data);
+    resp.code = status::OK;
+    let g = resp.group_mut(tags::SUBSCRIPTION);
+    g.attributes.push(Attribute::new(
+        "notify-subscription-id",
+        tags::INTEGER,
+        vec![Value::Integer(id)],
+    ));
+    g.attributes.push(Attribute::new(
+        "notify-lease-duration",
+        tags::INTEGER,
+        vec![Value::Integer(0)],
+    ));
+}
+
+/// Emit a subscription's description group (`cupsdCopySubscription`).
+fn add_sub_group(resp: &mut IppMessage, s: &events::Subscription, ctx: &Ctx) {
+    let g = resp.group_mut(tags::SUBSCRIPTION);
+    let evs: Vec<Value> = s
+        .event_names()
+        .iter()
+        .map(|e| Value::Keyword(e.clone().into()))
+        .collect();
+    if g.find("notify-events").is_none() {
+        g.attributes.push(Attribute::new("notify-events", tags::KEYWORD, evs));
+    }
+    let mut add = |name: &str, tag: u8, v: Value| {
+        if g.find(name).is_none() {
+            g.attributes.push(Attribute::new(name, tag, vec![v]));
+        }
+    };
+    add("notify-subscription-id", tags::INTEGER, Value::Integer(s.id));
+    add("notify-subscriber-user-name", tags::NAME, Value::Name(s.owner.clone().into()));
+    add("notify-lease-duration", tags::INTEGER, Value::Integer(s.lease_remaining()));
+    if let Some(p) = &s.printer {
+        let scheme = if ctx.is_encrypted { "ipps" } else { "ipp" };
+        add(
+            "notify-printer-uri",
+            tags::URI,
+            Value::Uri(format!("{scheme}://{}:{}/printers/{p}", ctx.hostname, ctx.port).into()),
+        );
+    }
+    if let Some(j) = s.job_id {
+        add("notify-job-id", tags::INTEGER, Value::Integer(j));
+    }
+    if let Some(d) = &s.user_data {
+        add("notify-user-data", tags::STRING, Value::OctetString(d.clone()));
+    }
+}
+
+/// `Get-Subscriptions` — `get_subscriptions`.
+fn get_subscriptions(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    resp.code = status::OK;
+    let printer = uri_attr
+        .and_then(attr_text)
+        .and_then(|u| dest_name(&u));
+    let owner = req
+        .find(tags::OPERATION, "requesting-user-name")
+        .and_then(attr_text)
+        .filter(|_| ctx.username.is_none()); // admin sees all
+    let guard = ctx.subs();
+    let ids: Vec<i32> = guard
+        .list(printer.as_deref(), owner.as_deref())
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    drop(guard);
+    for id in ids {
+        if let Some(s) = ctx.subs().find(id) {
+            // Owned copy to avoid holding the lock across group emission.
+            add_sub_group(resp, &s.clone(), ctx);
+        }
+    }
+}
+
+/// `Get-Subscription-Attributes`.
+fn get_subscription_attrs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let Some(id) = int_attr(req, "notify-subscription-id").map(|i| i as i32) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-id.");
+        return;
+    };
+    let subs = ctx.subs();
+    let Some(s) = subs.find(id) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Subscription #{id} not found.");
+        return;
+    };
+    let s2 = s.clone();
+    drop(subs);
+    resp.code = status::OK;
+    add_sub_group(resp, &s2, ctx);
+}
+
+/// `Renew-Subscription`.
+fn renew_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let Some(id) = int_attr(req, "notify-subscription-id").map(|i| i as i32) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-id.");
+        return;
+    };
+    if ctx.subs_write().renew(id) {
+        resp.code = status::OK;
+        let g = resp.group_mut(tags::SUBSCRIPTION);
+        g.attributes.push(Attribute::new(
+            "notify-subscription-id",
+            tags::INTEGER,
+            vec![Value::Integer(id)],
+        ));
+    } else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Subscription #{id} not found.");
+    }
+}
+
+/// `Cancel-Subscription`.
+fn cancel_subscription(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let Some(id) = int_attr(req, "notify-subscription-id").map(|i| i as i32) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-id.");
+        return;
+    };
+    if ctx.subs_write().remove(id).is_some() {
+        resp.code = status::OK;
+    } else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Subscription #{id} not found.");
+    }
+}
+
+/// `Get-Notifications` — ippget pull; drains matching subscription queues.
+fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let ids: Vec<i32> = req
+        .find(tags::OPERATION, "notify-subscription-ids")
+        .map(|a| {
+            a.values
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Integer(i) | Value::Enum(i) => Some(*i),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if ids.is_empty() {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-subscription-ids.");
+        return;
+    }
+    resp.code = status::OK;
+    let mut found_any = false;
+    for id in ids {
+        let notes = ctx.subs_write().drain(id);
+        for n in notes {
+            found_any = true;
+            let g = resp.group_mut(tags::EVENT_NOTIFICATION);
+            let mut add = |name: &str, tag: u8, v: Value| {
+                g.attributes.push(Attribute::new(name, tag, vec![v]));
+            };
+            add("notify-subscription-id", tags::INTEGER, Value::Integer(id));
+            add("notify-sequence-number", tags::INTEGER, Value::Integer(n.seq));
+            add("notify-subscribed-event", tags::KEYWORD, Value::Keyword(n.event.name().into()));
+            if let Some(p) = &n.printer {
+                add("notify-printer-uri", tags::URI, Value::Uri(p.clone().into()));
+            }
+            if let Some(j) = n.job_id {
+                add("notify-job-id", tags::INTEGER, Value::Integer(j));
+            }
+            if let Some(js) = n.job_state {
+                add("job-state", tags::ENUM, Value::Enum(js));
+            }
+            add("notify-text", tags::TEXT, Value::Text(n.text.clone().into()));
+        }
+    }
+    if !found_any {
+        // No queued events is still a valid ippget pull.
+        resp.code = status::OK;
+    }
 }

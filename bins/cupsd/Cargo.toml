@@ -24,3 +24,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 authn = { path = "../../crates/authn" }
 cups-tls = { path = "../../crates/cups-tls" }
 tokio-rustls = "0.26.6"
+events = { path = "../../crates/events" }
