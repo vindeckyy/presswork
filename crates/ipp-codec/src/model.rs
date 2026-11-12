@@ -313,6 +313,15 @@ impl IppMessage {
         &mut self.groups[pos]
     }
 
+    /// Append a *new* group with `tag` and return it — for repeated group
+    /// types (event-notification, document, job) where each occurrence is
+    /// a distinct group on the wire, unlike `group_mut` which reuses the
+    /// first match.
+    pub fn new_group_mut(&mut self, tag: u8) -> &mut Group {
+        self.groups.push(Group::new(tag));
+        self.groups.last_mut().unwrap()
+    }
+
     /// First group with `tag`.
     #[must_use]
     pub fn group(&self, tag: u8) -> Option<&Group> {

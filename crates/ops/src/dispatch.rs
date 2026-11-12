@@ -2179,9 +2179,16 @@ fn dest_name(uri: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Find an attribute in the `subscription-attributes-tag` group, falling
+/// back to the operation group (upstream accepts either placement).
+fn find_sub<'a>(req: &'a IppMessage, name: &str) -> Option<&'a Attribute> {
+    req.find(tags::SUBSCRIPTION, name)
+        .or_else(|| req.find(tags::OPERATION, name))
+}
+
 /// `notify-events` attr -> parsed Event mask. `None` when missing/invalid.
 fn notify_events(req: &IppMessage) -> Option<Vec<events::Event>> {
-    let a = req.find(tags::OPERATION, "notify-events")?;
+    let a = find_sub(req, "notify-events")?;
     let mut out = Vec::new();
     for v in &a.values {
         if let Value::Keyword(k) = v {
@@ -2231,11 +2238,14 @@ fn create_subscription(
             None,
         )
     };
-    let lease = int_attr(req, "notify-lease-duration")
-        .map(|l| l as i32)
+    let lease = find_sub(req, "notify-lease-duration")
+        .and_then(|a| a.values.first())
+        .and_then(|v| match v {
+            Value::Integer(i) => Some(*i),
+            _ => None,
+        })
         .unwrap_or(events::NEVER_EXPIRE);
-    let user_data = req
-        .find(tags::OPERATION, "notify-user-data")
+    let user_data = find_sub(req, "notify-user-data")
         .and_then(|a| a.first())
         .and_then(|v| match v {
             Value::OctetString(b) => Some(b.clone()),
@@ -2440,7 +2450,7 @@ fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         let notes = ctx.subs_write().drain(id);
         for n in notes {
             found_any = true;
-            let g = resp.group_mut(tags::EVENT_NOTIFICATION);
+            let g = resp.new_group_mut(tags::EVENT_NOTIFICATION);
             let mut add = |name: &str, tag: u8, v: Value| {
                 g.attributes.push(Attribute::new(name, tag, vec![v]));
             };
@@ -2455,11 +2465,26 @@ fn get_notifications(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
                 tags::KEYWORD,
                 Value::Keyword(n.event.name().into()),
             );
+            // Newer IPP notifications spec names the event `notify-event`;
+            // emit both so ippget consumers and the stock suite see it.
+            add(
+                "notify-event",
+                tags::KEYWORD,
+                Value::Keyword(n.event.name().into()),
+            );
             if let Some(p) = &n.printer {
+                let scheme = if ctx.is_encrypted { "ipps" } else { "ipp" };
+                let host = ctx.hostname.clone();
+                let port = ctx.port;
                 add(
                     "notify-printer-uri",
                     tags::URI,
-                    Value::Uri(p.clone().into()),
+                    Value::Uri(format!("{scheme}://{host}:{port}/printers/{p}").into()),
+                );
+                add(
+                    "printer-name",
+                    tags::NAME,
+                    Value::Name(p.clone().into()),
                 );
             }
             if let Some(j) = n.job_id {
