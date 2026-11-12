@@ -1,7 +1,9 @@
 //! `cupsdProcessIPPRequest()` — validation preamble + op switch.
 
 use ipp_codec::{ops::op, ops::status, tags, Attribute, IppMessage, Value};
+use job::{Job, Jobs};
 use printer::{ptype, Printer, Registry};
+use std::sync::RwLock;
 
 use crate::common::{copy_printer_attrs, new_response, requested_attrs, send_status};
 
@@ -52,12 +54,31 @@ pub struct Ctx<'a> {
     pub strict: bool,
     /// Queued job count per printer (0 until the `job` crate lands).
     pub queued_job_count: i32,
+    /// The job table (P2) — mutated by print/cancel ops.
+    pub jobs: &'a RwLock<Jobs>,
+    /// MIME database for filter-chain resolution.
+    pub mime: &'a mime_db::MimeDb,
+    /// `RequestRoot` spool dir.
+    pub request_root: std::path::PathBuf,
+    /// `ServerBin` dir (filters/backends live under it).
+    pub server_bin: std::path::PathBuf,
+    /// Raw document bytes that followed the IPP attrs in the request
+    /// (Print-Job / Send-Document payload). Empty for ops without a body.
+    pub document: &'a [u8],
+    /// Filename for the document (`document-name`/`job-name` fallback).
+    pub document_name: String,
 }
 
 impl<'a> Ctx<'a> {
     /// Build a context with config-derived defaults.
     #[must_use]
-    pub fn new(registry: &'a Registry, cfg: &'a cups_config::Config, port: u16) -> Self {
+    pub fn new(
+        registry: &'a Registry,
+        cfg: &'a cups_config::Config,
+        port: u16,
+        jobs: &'a RwLock<Jobs>,
+        mime: &'a mime_db::MimeDb,
+    ) -> Self {
         let mut ops: Vec<i32> = vec![
             i32::from(op::PRINT_JOB),
             i32::from(op::VALIDATE_JOB),
@@ -139,6 +160,22 @@ impl<'a> Ctx<'a> {
             operations_supported: ops,
             strict: cfg.cupsd.strict_conformance,
             queued_job_count: 0,
+            jobs,
+            mime,
+            request_root: cfg
+                .files
+                .request_root
+                .clone()
+                .unwrap_or_else(|| "/var/spool/cups".into())
+                .into(),
+            server_bin: cfg
+                .files
+                .server_bin
+                .clone()
+                .unwrap_or_else(|| "/usr/lib/cups".into())
+                .into(),
+            document: &[],
+            document_name: String::new(),
         }
     }
 }
@@ -286,6 +323,11 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::CUPS_GET_CLASSES) => get_printers(req, resp, ctx, ptype::CLASS),
         x if x == u32::from(op::VALIDATE_JOB) => validate_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_JOBS) => get_jobs(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::PRINT_JOB) => print_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CREATE_JOB) => create_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::SEND_DOCUMENT) => send_document(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CANCEL_JOB) => cancel_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::GET_JOB_ATTRIBUTES) => get_job_attributes(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CUPS_GET_DEVICES) || x == u32::from(op::CUPS_GET_PPDS) => {
             // P3/P7 dependencies (cups-deviced, PPD index).
             send_status(
@@ -517,15 +559,30 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         );
         return;
     };
-    if ctx.registry.validate_dest(&uri).is_none() {
+    let Some((p, _)) = ctx.registry.validate_dest(&uri) else {
         send_status(
             resp,
             status::ERROR_NOT_FOUND,
             "The printer or class does not exist.",
         );
         return;
+    };
+    let which = req
+        .find(tags::OPERATION, "which-jobs")
+        .and_then(attr_text)
+        .unwrap_or_else(|| "not-completed".into());
+    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    for j in jobs.for_printer(&p.name) {
+        let done = j.state.is_final();
+        let emit = match which.as_str() {
+            "completed" => done,
+            "all" => true,
+            _ => !done, // "not-completed" default
+        };
+        if emit {
+            add_job_group(resp, j, ctx);
+        }
     }
-    let _ = req;
     resp.code = status::OK;
 }
 
@@ -537,6 +594,14 @@ fn attr_text(a: &Attribute) -> Option<String> {
         | Value::Uri(t)
         | Value::Keyword(t)
         | Value::UriScheme(t) => Some(t.as_str().to_string()),
+        _ => None,
+    }
+}
+
+/// Integer/enum attribute first value.
+fn attr_int(a: &Attribute) -> Option<i64> {
+    match a.first()? {
+        Value::Integer(i) | Value::Enum(i) => Some(i64::from(*i)),
         _ => None,
     }
 }
@@ -557,4 +622,315 @@ fn valid_lang(s: &str) -> bool {
         && s.len() <= 35
         && s.split('-')
             .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+}
+
+// ==================== P2: job operations ====================
+
+/// `print_job()` — Print-Job: one document + one new job in a single op.
+/// Validates dest, spools `ctx.document` to `d%05d-001`, creates the job
+/// pending, and returns the job group.
+fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some((p, _)) = validate_accepting(ctx, resp, uri_attr) else {
+        return;
+    };
+    let format = req
+        .find(tags::OPERATION, "document-format")
+        .and_then(attr_text)
+        .unwrap_or_else(|| "application/octet-stream".into());
+    let title = req
+        .find(tags::OPERATION, "job-name")
+        .and_then(attr_text)
+        .or_else(|| {
+            req.find(tags::OPERATION, "document-name")
+                .and_then(attr_text)
+        })
+        .unwrap_or_else(|| ctx.document_name.clone());
+    let user = ctx
+        .requesting_user
+        .clone()
+        .or_else(|| {
+            req.find(tags::OPERATION, "requesting-user-name")
+                .and_then(attr_text)
+        })
+        .unwrap_or_else(|| "anonymous".into());
+    let copies = req
+        .find(tags::OPERATION, "copies")
+        .and_then(attr_int)
+        .map_or(1, |v| v.max(1) as i32);
+
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let id = jobs.alloc_id();
+    let mut job = Job::new(id, p.name.clone(), user);
+    job.title = title;
+    job.copies = copies;
+    job.format = format.clone();
+    job.attrs = req
+        .groups
+        .iter()
+        .find(|g| g.tag == tags::JOB)
+        .map(|g| g.attributes.clone())
+        .unwrap_or_default();
+
+    // Spool the document.
+    let data = job::Job::data_path(&ctx.request_root, id, 1);
+    if let Err(e) = std::fs::write(&data, ctx.document) {
+        send_status(resp, status::ERROR_INTERNAL, &format!("spool write: {e}"));
+        return;
+    }
+    let filetype = sniff(&ctx.mime, &data, &format);
+    job.files.push(job::JobFile {
+        num: 1,
+        filetype,
+        size: ctx.document.len() as u64,
+        name: ctx.document_name.clone(),
+        format,
+    });
+    if jobs.add(&ctx.request_root, job).is_err() {
+        send_status(resp, status::ERROR_INTERNAL, "cannot save job");
+        return;
+    }
+    resp.code = status::OK;
+    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+}
+
+/// `create_job()` — allocates an empty job awaiting Send-Document(s).
+fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some((p, _)) = validate_accepting(ctx, resp, uri_attr) else {
+        return;
+    };
+    let user = ctx
+        .requesting_user
+        .clone()
+        .or_else(|| {
+            req.find(tags::OPERATION, "requesting-user-name")
+                .and_then(attr_text)
+        })
+        .unwrap_or_else(|| "anonymous".into());
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let id = jobs.alloc_id();
+    let mut job = Job::new(id, p.name.clone(), user);
+    job.state = job::JobState::PendingHeld; // awaiting documents
+    job.reasons = vec!["job-data-insufficient".into()];
+    job.title = req
+        .find(tags::OPERATION, "job-name")
+        .and_then(attr_text)
+        .unwrap_or_default();
+    job.attrs = req
+        .groups
+        .iter()
+        .find(|g| g.tag == tags::JOB)
+        .map(|g| g.attributes.clone())
+        .unwrap_or_default();
+    if jobs.add(&ctx.request_root, job).is_err() {
+        send_status(resp, status::ERROR_INTERNAL, "cannot save job");
+        return;
+    }
+    resp.code = status::OK;
+    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+}
+
+/// `send_document()` — attach a document to an existing Create-Job job.
+fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let Some(job) = jobs.get_mut(id) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let num = job.files.len() as u32 + 1;
+    let data = job::Job::data_path(&ctx.request_root, id, num);
+    if std::fs::write(&data, ctx.document).is_err() {
+        send_status(resp, status::ERROR_INTERNAL, "spool write");
+        return;
+    }
+    let format = req
+        .find(tags::OPERATION, "document-format")
+        .and_then(attr_text)
+        .unwrap_or_else(|| job.format.clone());
+    let filetype = sniff(&ctx.mime, &data, &format);
+    job.files.push(job::JobFile {
+        num,
+        filetype,
+        size: ctx.document.len() as u64,
+        name: ctx.document_name.clone(),
+        format,
+    });
+    // `last-document` flag finalizes the job.
+    let last = req
+        .find(tags::OPERATION, "last-document")
+        .and_then(|a| a.values.first())
+        .is_some_and(|v| matches!(v, Value::Boolean(true)));
+    if last {
+        job.state = job::JobState::Pending;
+        job.reasons = vec!["job-incoming".into()];
+    }
+    let _ = jobs.save(&ctx.request_root, id);
+    resp.code = status::OK;
+    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+}
+
+/// `cancel_job()` — cancel + purge a job (state -> canceled, files removed).
+fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    if jobs.get(id).is_none() {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    }
+    if let Some(j) = jobs.get_mut(id) {
+        j.state = job::JobState::Canceled;
+        j.completed_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        );
+        let _ = j.save(&ctx.request_root);
+    }
+    resp.code = status::OK;
+    add_job_group(resp, jobs.get(id).unwrap(), ctx);
+}
+
+/// `get_job_attributes()` — one job's full attribute set.
+fn get_job_attributes(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let Some(job) = jobs.get(id) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    resp.code = status::OK;
+    add_job_group(resp, job, ctx);
+}
+
+// ---------- job helpers ----------
+
+/// Validate printer-uri exists + accepts jobs; returns the printer.
+fn validate_accepting<'r>(
+    ctx: &'r Ctx,
+    resp: &mut IppMessage,
+    uri_attr: Option<&Attribute>,
+) -> Option<(&'r Printer, String)> {
+    let Some(uri) = uri_attr.and_then(attr_text) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing \"printer-uri\".");
+        return None;
+    };
+    let Some((p, _)) = ctx.registry.validate_dest(&uri) else {
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "The printer or class does not exist.",
+        );
+        return None;
+    };
+    if !p.accepting {
+        send_status(
+            resp,
+            status::ERROR_NOT_ACCEPTING_JOBS,
+            "Destination is not accepting jobs.",
+        );
+        return None;
+    }
+    Some((p, uri))
+}
+
+/// Resolve the job-id from `job-uri`/`job-id` attrs.
+fn job_id(req: &IppMessage, uri_attr: Option<&Attribute>) -> Option<i32> {
+    // `job-id` integer first, else parse `job-uri` trailing id.
+    if let Some(a) = req.find(tags::OPERATION, "job-id") {
+        if let Some(Value::Integer(i) | Value::Enum(i)) = a.values.first() {
+            return Some(*i);
+        }
+    }
+    uri_attr
+        .and_then(attr_text)
+        .and_then(|u| u.rsplit('/').next().and_then(|s| s.parse().ok()))
+}
+
+/// Sniff the real MIME type of a spool file when the client said
+/// octet-stream, else trust the declared format.
+fn sniff(mime: &mime_db::MimeDb, path: &std::path::Path, declared: &str) -> String {
+    if declared != "application/octet-stream" {
+        return declared.into();
+    }
+    let mut head = [0u8; 8192];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+        .unwrap_or(0);
+    mime.detect(path.to_str().unwrap_or(""), &head[..n])
+        .map(|t| t.name())
+        .unwrap_or_else(|| declared.into())
+}
+
+/// Emit a `job` attribute group into `resp` for `job` (`cupsdCopyJob`).
+fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx) {
+    let g = resp.group_mut(tags::JOB);
+    let mut add = |name: &str, tag: u8, v: Value| {
+        if g.find(name).is_none() {
+            g.attributes.push(Attribute::new(name, tag, vec![v]));
+        }
+    };
+    let scheme = if ctx.is_encrypted { "ipps" } else { "ipp" };
+    add("job-id", tags::INTEGER, Value::Integer(job.id));
+    add(
+        "job-uri",
+        tags::URI,
+        Value::Text(format!("{scheme}://{}:{}/jobs/{}", ctx.hostname, ctx.port, job.id).into()),
+    );
+    add(
+        "job-printer-uri",
+        tags::URI,
+        Value::Text(
+            format!(
+                "{scheme}://{}:{}/printers/{}",
+                ctx.hostname, ctx.port, job.dest
+            )
+            .into(),
+        ),
+    );
+    add("job-state", tags::ENUM, Value::Enum(job.state as i32));
+    add(
+        "job-state-reasons",
+        tags::KEYWORD,
+        Value::Keyword(job.reasons.first().cloned().unwrap_or_default().into()),
+    );
+    add(
+        "job-originating-user-name",
+        tags::NAME,
+        Value::Name(job.username.clone().into()),
+    );
+    add(
+        "job-name",
+        tags::NAME,
+        Value::Name(job.title.clone().into()),
+    );
+    add("job-priority", tags::INTEGER, Value::Integer(job.priority));
+    add("copies", tags::INTEGER, Value::Integer(job.copies));
+    add(
+        "document-format",
+        tags::MIMETYPE,
+        Value::Text(job.format.clone().into()),
+    );
+    add(
+        "time-at-creation",
+        tags::INTEGER,
+        Value::Integer(job.created_at as i32),
+    );
+    if let Some(t) = job.completed_at {
+        add("time-at-completed", tags::INTEGER, Value::Integer(t as i32));
+    }
 }

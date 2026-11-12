@@ -13,3 +13,5 @@ cups-config = { path = "../cups-config" }
 ipp-codec = { path = "../ipp-codec" }
 printer = { path = "../printer" }
 tracing = "0.1"
+job = { path = "../job" }
+mime-db = { path = "../mime-db" }

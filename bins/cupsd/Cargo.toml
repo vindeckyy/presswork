@@ -13,6 +13,9 @@ cups-config = { path = "../../crates/cups-config" }
 cups-log = { path = "../../crates/cups-log" }
 httpd = { path = "../../crates/httpd" }
 ipp-codec = { path = "../../crates/ipp-codec" }
+job = { path = "../../crates/job" }
+mime-db = { path = "../../crates/mime-db" }
+pipeline = { path = "../../crates/pipeline" }
 ops = { path = "../../crates/ops" }
 printer = { path = "../../crates/printer" }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "signal", "fs", "io-util", "time"] }

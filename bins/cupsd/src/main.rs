@@ -166,6 +166,22 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
     let _ = proot;
     let registry = std::sync::Arc::new(std::sync::RwLock::new(registry));
 
+    // Job table (RequestRoot) + MIME database (ServerRoot or DataDir).
+    let request_root = cfg
+        .files
+        .request_root
+        .clone()
+        .unwrap_or_else(|| "/var/spool/cups".into());
+    let jobs = Arc::new(std::sync::RwLock::new(job::Jobs::load_all(
+        std::path::Path::new(&request_root),
+    )));
+    let mime_dir = cfg
+        .files
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| "/usr/share/cups".into());
+    let mime = Arc::new(mime_db::MimeDb::load(std::path::Path::new(&mime_dir)).unwrap_or_default());
+
     // Log sinks — error_log always (foreground → stderr), access_log
     // when configured.
     let log = Arc::new(Logs {
@@ -208,6 +224,8 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         registry.clone(),
                         cfg.clone(),
                         log.clone(),
+                        jobs.clone(),
+                        mime.clone(),
                     ));
                 }
                 Err(e) => log.err(
@@ -229,6 +247,8 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         registry.clone(),
                         cfg.clone(),
                         log.clone(),
+                        jobs.clone(),
+                        mime.clone(),
                     ));
                 }
                 Err(e) => log.err(
@@ -285,6 +305,8 @@ async fn accept_tcp(
     registry: Arc<std::sync::RwLock<Registry>>,
     cfg: Arc<Config>,
     log: Arc<Logs>,
+    jobs: Arc<std::sync::RwLock<job::Jobs>>,
+    mime: Arc<mime_db::MimeDb>,
 ) {
     let _ = ssl; // TLS acceptor lands with cups-tls (P5)
     loop {
@@ -298,9 +320,11 @@ async fn accept_tcp(
                 let port = stream.local_addr().map(|a| a.port()).unwrap_or(631);
                 let host = peer.ip().to_string();
                 let log = log.clone();
+                let jobs = jobs.clone();
+                let mime = mime.clone();
                 tokio::spawn(async move {
                     serve_one(
-                        stream, opts, doc_root, registry, cfg, port, local, log, host,
+                        stream, opts, doc_root, registry, cfg, port, local, log, host, jobs, mime,
                     )
                     .await;
                 });
@@ -320,6 +344,8 @@ async fn accept_unix(
     registry: Arc<std::sync::RwLock<Registry>>,
     cfg: Arc<Config>,
     log: Arc<Logs>,
+    jobs: Arc<std::sync::RwLock<job::Jobs>>,
+    mime: Arc<mime_db::MimeDb>,
 ) {
     loop {
         match listener.accept().await {
@@ -329,6 +355,8 @@ async fn accept_unix(
                 let registry = registry.clone();
                 let cfg = cfg.clone();
                 let log = log.clone();
+                let jobs = jobs.clone();
+                let mime = mime.clone();
                 tokio::spawn(async move {
                     serve_one(
                         stream,
@@ -340,6 +368,8 @@ async fn accept_unix(
                         true,
                         log,
                         "localhost".to_string(),
+                        jobs,
+                        mime,
                     )
                     .await;
                 });
@@ -362,12 +392,16 @@ async fn serve_one<S>(
     local: bool,
     log: Arc<Logs>,
     host: String,
+    jobs: Arc<std::sync::RwLock<job::Jobs>>,
+    mime: Arc<mime_db::MimeDb>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
     let (mut rd, mut wr) = split(stream);
     let _ = httpd::serve_connection(&mut rd, &mut wr, &opts, move |req| {
-        dispatch_req(&req, &doc_root, &registry, &cfg, port, local, &log, &host)
+        dispatch_req(
+            &req, &doc_root, &registry, &cfg, port, local, &log, &host, &jobs, &mime,
+        )
     })
     .await;
 }
@@ -397,8 +431,10 @@ fn dispatch_req(
     cfg: &Config,
     port: u16,
     local: bool,
-    log: &Logs,
+    log: &Arc<Logs>,
     host: &str,
+    jobs: &Arc<std::sync::RwLock<job::Jobs>>,
+    mime: &Arc<mime_db::MimeDb>,
 ) -> Response {
     match req.method {
         Method::Get | Method::Head => static_get(&req.uri, doc_root),
@@ -411,15 +447,15 @@ fn dispatch_req(
                     .eq_ignore_ascii_case("application/ipp")
             }) =>
         {
-            ipp_dispatch(req, registry, cfg, port, local, log, host)
+            ipp_dispatch(req, registry, cfg, port, local, log, host, jobs, mime)
         }
         Method::Options if req.wants_tls_upgrade => Response::status(StatusCode::UPGRADE_REQUIRED),
         Method::Options => {
-            log_access(log, host, req, 200, 0, "-", "-");
+            log_access(&**log, host, req, 200, 0, "-", "-");
             Response::status(StatusCode::OK)
         }
         _ => {
-            log_access(log, host, req, 501, 0, "-", "-");
+            log_access(&**log, host, req, 501, 0, "-", "-");
             Response::status(StatusCode::NOT_IMPLEMENTED)
         }
     }
@@ -493,25 +529,188 @@ fn ipp_dispatch(
     cfg: &Config,
     port: u16,
     local: bool,
-    log: &Logs,
+    log: &Arc<Logs>,
     host: &str,
+    jobs: &Arc<std::sync::RwLock<job::Jobs>>,
+    mime: &Arc<mime_db::MimeDb>,
 ) -> Response {
-    let Ok((msg, _)) = ipp_codec::decode(req.body.as_bytes()) else {
-        log_access(log, host, req, 400, 0, "-", "-");
+    let Ok((msg, consumed)) = ipp_codec::decode(req.body.as_bytes()) else {
+        log_access(&**log, host, req, 400, 0, "-", "-");
         return Response::status(StatusCode::BAD_REQUEST);
     };
+    let document = &req.body.as_bytes()[consumed..];
     let reg = registry.read().unwrap_or_else(|e| e.into_inner());
-    let mut ctx = ops::Ctx::new(&reg, cfg, port);
+    let mut ctx = ops::Ctx::new(&reg, cfg, port, jobs.as_ref(), mime.as_ref());
     ctx.is_local = local;
+    ctx.document = document;
     let resp = ops::dispatch(&msg, &ctx);
+    drop(reg);
+    // Scheduler tick: pick next pending job on an idle printer and spawn
+    // its filter->backend pipeline (mirrors start_job being driven by the
+    // scheduler's event loop).
+    schedule_tick(jobs, registry, mime, cfg, log);
     let op_name = ipp_codec::ops::op::name(msg.code);
     let status_name = ipp_codec::ops::status::name(resp.code);
     match ipp_codec::encode(&resp) {
         Ok(b) => {
             let n = b.len() as u64;
-            log_access(log, host, req, 200, n, op_name, status_name);
+            log_access(&**log, host, req, 200, n, op_name, status_name);
             Response::ipp(StatusCode::OK, b)
         }
         Err(_) => Response::status(StatusCode::INTERNAL),
+    }
+}
+
+/// `start_job` scheduler tick — pick the first pending job whose printer is
+/// idle + accepting, resolve its filter chain, and spawn the pipeline in a
+/// watcher thread that marks the job completed/aborted on exit.
+fn schedule_tick(
+    jobs: &Arc<std::sync::RwLock<job::Jobs>>,
+    registry: &std::sync::RwLock<Registry>,
+    mime: &mime_db::MimeDb,
+    cfg: &Config,
+    log: &Arc<Logs>,
+) {
+    let request_root = std::path::PathBuf::from(
+        cfg.files
+            .request_root
+            .clone()
+            .unwrap_or_else(|| "/var/spool/cups".into()),
+    );
+    let server_bin = std::path::PathBuf::from(
+        cfg.files
+            .server_bin
+            .clone()
+            .unwrap_or_else(|| "/usr/lib/cups".into()),
+    );
+
+    let found: Option<(i32, pipeline::JobSpec, String, String)> = {
+        let jobs_r = jobs.read().unwrap_or_else(|e| e.into_inner());
+        let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+        let mut out = None;
+        for j in jobs_r.active() {
+            if j.state != job::JobState::Pending || j.backend_pid.is_some() {
+                continue;
+            }
+            let Some(p) = reg.find(&j.dest) else { continue };
+            if !p.accepting {
+                continue;
+            }
+            // Printer busy if it already has a processing job.
+            if jobs_r
+                .for_printer(&p.name)
+                .any(|x| x.state == job::JobState::Processing)
+            {
+                continue;
+            }
+            let Some(file) = j.files.first() else {
+                continue;
+            };
+            let data = job::Job::data_path(&request_root, j.id, file.num);
+            // Target format: raw passthrough for P2 (driverless PPD formats
+            // land in P7). ipp/socket/file printers accept raw streams.
+            let dst = "application/vnd.cups-raw".to_string();
+            let spec = pipeline::JobSpec {
+                printer: p.name.clone(),
+                job_id: j.id,
+                username: j.username.clone(),
+                title: j.title.clone(),
+                copies: j.copies,
+                options: String::new(),
+                data_file: data,
+                src_type: file.filetype.clone(),
+                dst_type: dst.clone(),
+                device_uri: p.device_uri.clone(),
+                filter_dir: server_bin.join("filter"),
+                backend_dir: server_bin.join("backend"),
+                backend: pipeline::backend_for_uri(&p.device_uri),
+                env: std::collections::HashMap::new(),
+            };
+            out = Some((j.id, spec, file.filetype.clone(), dst));
+            break;
+        }
+        out
+    };
+    let Some((job_id, spec, src, dst)) = found else {
+        return;
+    };
+
+    let chain = mime.filter_chain(&src, &dst, 0).unwrap_or_default();
+    let chain: Vec<mime_db::Conv> = chain.into_iter().cloned().collect();
+
+    match spec.spawn(&chain) {
+        Ok(mut pipe) => {
+            if let Some(j) = jobs
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(job_id)
+            {
+                j.state = job::JobState::Processing;
+                j.backend_pid = Some(pipe.backend.id() as i32);
+                let _ = j.save(&request_root);
+            }
+            log.err(
+                cups_log::Level::Info,
+                format!("[Job {job_id}] Started backend (PID {})", pipe.backend.id()),
+            );
+            let jobs = jobs.clone();
+            let log = log.clone();
+            std::thread::spawn(move || {
+                let status = pipe.backend.wait();
+                for mut f in pipe.filters {
+                    let _ = f.wait();
+                }
+                let ok = status.map(|s| s.success()).unwrap_or(false);
+                if let Some(j) = jobs
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_mut(job_id)
+                {
+                    j.state = if ok {
+                        job::JobState::Completed
+                    } else {
+                        job::JobState::Aborted
+                    };
+                    j.reasons = vec![if ok {
+                        "job-completed-successfully".into()
+                    } else {
+                        "job-aborted-by-system".into()
+                    }];
+                    j.backend_pid = None;
+                    j.completed_at = Some(job::now());
+                    let _ = j.save(&request_root);
+                }
+                log.err(
+                    if ok {
+                        cups_log::Level::Info
+                    } else {
+                        cups_log::Level::Error
+                    },
+                    format!(
+                        "[Job {job_id}] {}",
+                        if ok {
+                            "Job completed."
+                        } else {
+                            "Backend failed; job aborted."
+                        }
+                    ),
+                );
+            });
+        }
+        Err(e) => {
+            if let Some(j) = jobs
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(job_id)
+            {
+                j.state = job::JobState::Aborted;
+                j.reasons = vec!["job-aborted-by-system".into()];
+                let _ = j.save(&request_root);
+            }
+            log.err(
+                cups_log::Level::Error,
+                format!("[Job {job_id}] Unable to start job: {e}"),
+            );
+        }
     }
 }
