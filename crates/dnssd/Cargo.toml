@@ -9,3 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+printer = { path = "../printer" }
+mdns-sd = "0.21.7"

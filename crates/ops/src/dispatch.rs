@@ -79,6 +79,8 @@ pub struct Ctx<'a> {
     pub system_groups: Vec<String>,
     /// IPP event subscriptions (`Subscriptions` global).
     pub subscriptions: &'a RwLock<events::Subscriptions>,
+    /// DNS-SD advertiser (`DNSSDContext`), `None` when `Browsing`/`dnssd` off.
+    pub dnssd: &'a RwLock<Option<dnssd::Advertiser>>,
 }
 
 impl Ctx<'_> {
@@ -93,6 +95,31 @@ impl Ctx<'_> {
     /// Emit an event to all covering subscriptions.
     pub fn event(&self, ev: events::Event, printer: Option<&str>, job: Option<i32>, text: String) {
         self.subs_write().push(ev, printer, job, None, text);
+    }
+
+    /// `cupsdRegisterPrinter` — advertise a shared printer via DNS-SD.
+    pub fn dnssd_publish(&self, p: &printer::Printer) {
+        if let Some(adv) = self.dnssd.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            let _ = adv.publish(&dnssd::SharedPrinter {
+                name: p.name.clone(),
+                info: p.info.clone().unwrap_or_default(),
+                make_model: p.make_model.clone().unwrap_or_default(),
+                location: p.location.clone().unwrap_or_default(),
+                pdl: String::new(),
+                printer_type: p.ptype as u32,
+                printer_state: p.state,
+                uuid: p.uuid.clone(),
+                is_class: p.ptype & ptype::CLASS != 0,
+                is_fax: p.ptype & ptype::FAX != 0,
+            });
+        }
+    }
+
+    /// `cupsdDeregisterPrinter` — stop advertising a printer.
+    pub fn dnssd_unpublish(&self, name: &str) {
+        if let Some(adv) = self.dnssd.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            adv.unpublish(name);
+        }
     }
 }
 
@@ -116,6 +143,7 @@ impl<'a> Ctx<'a> {
         jobs: &'a RwLock<Jobs>,
         mime: &'a mime_db::MimeDb,
         subscriptions: &'a RwLock<events::Subscriptions>,
+        dnssd: &'a RwLock<Option<dnssd::Advertiser>>,
     ) -> Self {
         let mut ops: Vec<i32> = vec![
             i32::from(op::PRINT_JOB),
@@ -220,6 +248,7 @@ impl<'a> Ctx<'a> {
             user_groups: Vec::new(),
             system_groups: cfg.files.system_group_names.clone(),
             subscriptions,
+            dnssd,
         }
     }
 }
@@ -1234,6 +1263,14 @@ fn add_modify_printer(
         None,
         format!("Printer {name} {}.", if exists { "modified" } else { "added" }),
     );
+    // DNS-SD: (re)advertise when shared, withdraw when unshared.
+    if let Some(p) = ctx.reg().find(&name).cloned() {
+        if p.shared {
+            ctx.dnssd_publish(&p);
+        } else {
+            ctx.dnssd_unpublish(&name);
+        }
+    }
     resp.code = status::OK;
 }
 
@@ -1261,6 +1298,7 @@ fn delete_printer(
     }
     drop(reg);
     save_printers(ctx);
+    ctx.dnssd_unpublish(&name);
     ctx.event(
         events::Event::PrinterDeleted,
         Some(&name),
@@ -1325,6 +1363,12 @@ fn set_printer_state(
         None,
         format!("Printer {name} state changed to {state}."),
     );
+    // Refresh `printer-state` in the DNS-SD TXT when shared.
+    if let Some(p) = ctx.reg().find(&name).cloned() {
+        if p.shared {
+            ctx.dnssd_publish(&p);
+        }
+    }
     resp.code = status::OK;
 }
 
@@ -1467,6 +1511,14 @@ fn set_printer_attributes(
     }
     drop(reg);
     save_printers(ctx);
+    // `printer-is-shared` may have toggled — refresh DNS-SD accordingly.
+    if let Some(p) = ctx.reg().find(&name).cloned() {
+        if p.shared {
+            ctx.dnssd_publish(&p);
+        } else {
+            ctx.dnssd_unpublish(&name);
+        }
+    }
     resp.code = status::OK;
 }
 

@@ -25,3 +25,4 @@ authn = { path = "../../crates/authn" }
 cups-tls = { path = "../../crates/cups-tls" }
 tokio-rustls = "0.26.6"
 events = { path = "../../crates/events" }
+dnssd = { path = "../../crates/dnssd" }

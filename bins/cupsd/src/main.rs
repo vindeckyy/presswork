@@ -173,6 +173,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         .clone()
         .unwrap_or_else(|| "/var/spool/cups".into());
     let subs = Arc::new(std::sync::RwLock::new(events::Subscriptions::new()));
+    let dnssd_state = Arc::new(std::sync::RwLock::new(None::<dnssd::Advertiser>));
     let jobs = Arc::new(std::sync::RwLock::new(job::Jobs::load_all(
         std::path::Path::new(&request_root),
     )));
@@ -229,6 +230,68 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         }
     };
 
+    // DNS-SD (`cupsdStartBrowsing`/`dnssdRegisterPrinter`) — advertise shared
+    // printers when `Browsing` + `BrowseLocalProtocols dnssd` are enabled.
+    {
+        let port = cfg
+            .cupsd
+            .listeners
+            .iter()
+            .find_map(|l| match &l.addr {
+                ListenAddr::Tcp(a) => Some(a.port()),
+                _ => None,
+            })
+            .unwrap_or(631);
+        let dnssd_on = cfg.cupsd.browsing
+            && cfg.cupsd.browse_local_protocols.0 & cups_config::BrowseProtocols::DNSSD.0 != 0;
+        if dnssd_on {
+            let host = cfg
+                .cupsd
+                .dnssd_host_name
+                .clone()
+                .unwrap_or_else(hostname);
+            let computer = cfg
+                .cupsd
+                .dnssd_computer_name
+                .clone()
+                .unwrap_or_else(hostname);
+            match dnssd::Advertiser::start(&host, &computer, port, tls.is_some()) {
+                Ok(mut adv) => {
+                    // Publish every currently-shared queue.
+                    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+                    let mut n = 0;
+                    for p in reg.printers.values() {
+                        if p.shared {
+                            let _ = adv.publish(&dnssd::SharedPrinter {
+                                name: p.name.clone(),
+                                info: p.info.clone().unwrap_or_default(),
+                                make_model: p.make_model.clone().unwrap_or_default(),
+                                location: p.location.clone().unwrap_or_default(),
+                                pdl: String::new(),
+                                printer_type: p.ptype as u32,
+                                printer_state: p.state,
+                                uuid: p.uuid.clone(),
+                                is_class: p.ptype & printer::ptype::CLASS != 0,
+                                is_fax: p.ptype & printer::ptype::FAX != 0,
+                            });
+                            n += 1;
+                        }
+                    }
+                    drop(reg);
+                    log.err(
+                        cups_log::Level::Info,
+                        format!("DNS-SD advertising {n} shared printer(s) on {host}"),
+                    );
+                    *dnssd_state.write().unwrap_or_else(|e| e.into_inner()) = Some(adv);
+                }
+                Err(e) => log.err(
+                    cups_log::Level::Warn,
+                    format!("DNS-SD unavailable ({e}); sharing disabled"),
+                ),
+            }
+        }
+    }
+
     // Bind all listeners.
     let mut join = tokio::task::JoinSet::new();
     let mut bound = 0usize;
@@ -256,6 +319,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         jobs.clone(),
                         mime.clone(),
                         subs.clone(),
+                        dnssd_state.clone(),
                         server_root.clone(),
                     ));
                 }
@@ -282,6 +346,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         jobs.clone(),
                         mime.clone(),
                         subs.clone(),
+                        dnssd_state.clone(),
                         server_root.clone(),
                     ));
                 }
@@ -343,6 +408,7 @@ async fn accept_tcp(
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
     subs: Arc<std::sync::RwLock<events::Subscriptions>>,
+    dnssd_state: Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: Arc<PathBuf>,
 ) {
     loop {
@@ -359,6 +425,7 @@ async fn accept_tcp(
                 let jobs = jobs.clone();
                 let mime = mime.clone();
                 let subs = subs.clone();
+                let dnssd_state = dnssd_state.clone();
                 let server_root = server_root.clone();
                 let client_addr = peer.ip();
                 let tls = tls.clone();
@@ -376,6 +443,7 @@ async fn accept_tcp(
                         jobs,
                         mime,
                         subs,
+                        dnssd_state,
                         server_root,
                         client_addr,
                         tls,
@@ -403,6 +471,7 @@ async fn accept_unix(
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
     subs: Arc<std::sync::RwLock<events::Subscriptions>>,
+    dnssd_state: Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: Arc<PathBuf>,
 ) {
     loop {
@@ -416,6 +485,7 @@ async fn accept_unix(
                 let jobs = jobs.clone();
                 let mime = mime.clone();
                 let subs = subs.clone();
+                let dnssd_state = dnssd_state.clone();
                 let server_root = server_root.clone();
                 let tls = tls.clone();
                 tokio::spawn(async move {
@@ -432,6 +502,7 @@ async fn accept_unix(
                         jobs,
                         mime,
                         subs,
+                        dnssd_state,
                         server_root,
                         std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                         tls,
@@ -461,6 +532,7 @@ async fn serve_one<S>(
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
     subs: Arc<std::sync::RwLock<events::Subscriptions>>,
+    dnssd_state: Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: Arc<PathBuf>,
     client_addr: std::net::IpAddr,
     tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
@@ -489,6 +561,7 @@ async fn serve_one<S>(
                         jobs: &jobs,
                         mime: &mime,
                         subs: &subs,
+                        dnssd_state: &dnssd_state,
                         server_root: server_root.as_path(),
                         client_addr,
                     },
@@ -515,6 +588,7 @@ async fn serve_one<S>(
                 &jobs,
                 &mime,
                 &subs,
+                &dnssd_state,
                 &server_root,
                 client_addr,
                 false,
@@ -545,6 +619,7 @@ async fn serve_one<S>(
                         jobs: &jobs,
                         mime: &mime,
                         subs: &subs,
+                        dnssd_state: &dnssd_state,
                         server_root: server_root.as_path(),
                         client_addr,
                     },
@@ -567,6 +642,7 @@ struct ConnArgs<'a> {
     jobs: &'a Arc<std::sync::RwLock<job::Jobs>>,
     mime: &'a Arc<mime_db::MimeDb>,
     subs: &'a Arc<std::sync::RwLock<events::Subscriptions>>,
+    dnssd_state: &'a Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: &'a Path,
     client_addr: std::net::IpAddr,
 }
@@ -589,6 +665,7 @@ where
             a.jobs,
             a.mime,
             a.subs,
+            a.dnssd_state,
             a.server_root,
             a.client_addr,
             encrypted,
@@ -627,6 +704,7 @@ fn dispatch_req(
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     mime: &Arc<mime_db::MimeDb>,
     subs: &Arc<std::sync::RwLock<events::Subscriptions>>,
+    dnssd_state: &Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
     encrypted: bool,
@@ -653,6 +731,7 @@ fn dispatch_req(
                 jobs,
                 mime,
                 subs,
+                dnssd_state,
                 server_root,
                 client_addr,
                 encrypted,
@@ -743,6 +822,7 @@ fn ipp_dispatch(
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     mime: &Arc<mime_db::MimeDb>,
     subs: &Arc<std::sync::RwLock<events::Subscriptions>>,
+    dnssd_state: &Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
     encrypted: bool,
@@ -752,7 +832,7 @@ fn ipp_dispatch(
         return Response::status(StatusCode::BAD_REQUEST);
     };
     let document = &req.body.as_bytes()[consumed..];
-    let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref(), subs.as_ref());
+    let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref(), subs.as_ref(), dnssd_state.as_ref());
     ctx.is_local = local;
     ctx.is_encrypted = encrypted;
     // httpGetHostname: prefer the request's Host header for generated URIs.
