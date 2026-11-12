@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::io::{split, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, UnixListener};
 
 use cups_config::{Config, Diagnostic, ListenAddr, Paths, Severity};
@@ -202,6 +202,32 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         },
     });
 
+    // TLS identity — load {ServerRoot}/ssl/server.crt|key, generating a
+    // self-signed pair on first boot (upstream `cupsdCreateCert`). Built
+    // unconditionally so it can serve both `SSLListen` first-byte sockets and
+    // the RFC 2817 upgrade on plain listeners.
+    let tls = match cups_tls::load_or_create(&cups_tls::ssl_dir(&server_root), &hostname())
+        .map(|id| id.acceptor())
+    {
+        Ok(acc) => {
+            log.err(
+                cups_log::Level::Info,
+                format!(
+                    "Using self-signed TLS certificate in {}",
+                    cups_tls::ssl_dir(&server_root).display()
+                ),
+            );
+            Some(Arc::new(acc))
+        }
+        Err(e) => {
+            log.err(
+                cups_log::Level::Warn,
+                format!("Unable to set up TLS ({e}); encryption disabled"),
+            );
+            None
+        }
+    };
+
     // Bind all listeners.
     let mut join = tokio::task::JoinSet::new();
     let mut bound = 0usize;
@@ -220,6 +246,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                     join.spawn(accept_tcp(
                         l,
                         ln.ssl,
+                        tls.clone(),
                         opts.clone(),
                         doc_root.clone(),
                         registry.clone(),
@@ -244,6 +271,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                     );
                     join.spawn(accept_unix(
                         l,
+                        tls.clone(),
                         opts.clone(),
                         doc_root.clone(),
                         registry.clone(),
@@ -302,7 +330,8 @@ fn bind_unix(p: &Path) -> std::io::Result<UnixListener> {
 
 async fn accept_tcp(
     listener: TcpListener,
-    ssl: bool,
+    ssl_first_byte: bool,
+    tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
     opts: Arc<httpd::ServerOptions>,
     doc_root: PathBuf,
     registry: Arc<std::sync::RwLock<Registry>>,
@@ -312,7 +341,6 @@ async fn accept_tcp(
     mime: Arc<mime_db::MimeDb>,
     server_root: Arc<PathBuf>,
 ) {
-    let _ = ssl; // TLS acceptor lands with cups-tls (P5)
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
@@ -328,6 +356,7 @@ async fn accept_tcp(
                 let mime = mime.clone();
                 let server_root = server_root.clone();
                 let client_addr = peer.ip();
+                let tls = tls.clone();
                 tokio::spawn(async move {
                     serve_one(
                         stream,
@@ -343,6 +372,8 @@ async fn accept_tcp(
                         mime,
                         server_root,
                         client_addr,
+                        tls,
+                        ssl_first_byte,
                     )
                     .await;
                 });
@@ -357,6 +388,7 @@ async fn accept_tcp(
 
 async fn accept_unix(
     listener: UnixListener,
+    tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
     opts: Arc<httpd::ServerOptions>,
     doc_root: PathBuf,
     registry: Arc<std::sync::RwLock<Registry>>,
@@ -377,6 +409,7 @@ async fn accept_unix(
                 let jobs = jobs.clone();
                 let mime = mime.clone();
                 let server_root = server_root.clone();
+                let tls = tls.clone();
                 tokio::spawn(async move {
                     serve_one(
                         stream,
@@ -392,6 +425,8 @@ async fn accept_unix(
                         mime,
                         server_root,
                         std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                        tls,
+                        false,
                     )
                     .await;
                 });
@@ -418,24 +453,130 @@ async fn serve_one<S>(
     mime: Arc<mime_db::MimeDb>,
     server_root: Arc<PathBuf>,
     client_addr: std::net::IpAddr,
+    tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
+    ssl_first_byte: bool,
 ) where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (mut rd, mut wr) = split(stream);
-    let _ = httpd::serve_connection(&mut rd, &mut wr, &opts, move |req| {
+    let mut stream = stream;
+
+    // `SSLListen` — TLS from the first byte.
+    if ssl_first_byte {
+        if let Some(acc) = &tls {
+            if let Ok(mut ts) = acc.accept(stream).await {
+                serve_conn(
+                    &mut ts,
+                    &opts,
+                    true,
+                    ConnArgs {
+                        doc_root: doc_root.as_path(),
+                        registry: registry.as_ref(),
+                        cfg: cfg.as_ref(),
+                        port,
+                        local,
+                        log: &log,
+                        host: &host,
+                        jobs: &jobs,
+                        mime: &mime,
+                        server_root: server_root.as_path(),
+                        client_addr,
+                    },
+                )
+                .await;
+            }
+        }
+        return;
+    }
+
+    // Plain connection. `OPTIONS *`+`Upgrade: TLS/1.x` -> 101 -> wrap+reserve.
+    let upgraded = std::sync::atomic::AtomicBool::new(false);
+    {
+        let handler = |req: Request| {
+            let mut r = dispatch_req(
+                &req,
+                &doc_root,
+                &registry,
+                &cfg,
+                port,
+                local,
+                &log,
+                &host,
+                &jobs,
+                &mime,
+                &server_root,
+                client_addr,
+                false,
+            );
+            if req.wants_tls_upgrade && tls.is_some() {
+                upgraded.store(true, std::sync::atomic::Ordering::SeqCst);
+                r.status = StatusCode::SWITCHING_PROTOCOLS;
+            }
+            r
+        };
+        let _ = httpd::serve_connection(&mut stream, &opts, handler).await;
+    }
+    if upgraded.load(std::sync::atomic::Ordering::SeqCst) {
+        if let Some(acc) = &tls {
+            if let Ok(mut ts) = acc.accept(stream).await {
+                serve_conn(
+                    &mut ts,
+                    &opts,
+                    true,
+                    ConnArgs {
+                        doc_root: doc_root.as_path(),
+                        registry: registry.as_ref(),
+                        cfg: cfg.as_ref(),
+                        port,
+                        local,
+                        log: &log,
+                        host: &host,
+                        jobs: &jobs,
+                        mime: &mime,
+                        server_root: server_root.as_path(),
+                        client_addr,
+                    },
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Shared connection args for `serve_conn`.
+struct ConnArgs<'a> {
+    doc_root: &'a Path,
+    registry: &'a std::sync::RwLock<Registry>,
+    cfg: &'a Config,
+    port: u16,
+    local: bool,
+    log: &'a Arc<Logs>,
+    host: &'a str,
+    jobs: &'a Arc<std::sync::RwLock<job::Jobs>>,
+    mime: &'a Arc<mime_db::MimeDb>,
+    server_root: &'a Path,
+    client_addr: std::net::IpAddr,
+}
+
+/// `serve_connection` bound to a dispatch_req closure.
+async fn serve_conn<S>(stream: &mut S, opts: &httpd::ServerOptions, encrypted: bool, a: ConnArgs<'_>)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let _ = httpd::serve_connection(stream, opts, |req| {
         dispatch_req(
             &req,
-            &doc_root,
-            &registry,
-            &cfg,
-            port,
-            local,
-            &log,
-            &host,
-            &jobs,
-            &mime,
-            &server_root,
-            client_addr,
+            a.doc_root,
+            a.registry,
+            a.cfg,
+            a.port,
+            a.local,
+            a.log,
+            a.host,
+            a.jobs,
+            a.mime,
+            a.server_root,
+            a.client_addr,
+            encrypted,
         )
     })
     .await;
@@ -472,6 +613,7 @@ fn dispatch_req(
     mime: &Arc<mime_db::MimeDb>,
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
+    encrypted: bool,
 ) -> Response {
     match req.method {
         Method::Get | Method::Head => static_get(&req.uri, doc_root),
@@ -496,6 +638,7 @@ fn dispatch_req(
                 mime,
                 server_root,
                 client_addr,
+                encrypted,
             )
         }
         Method::Options if req.wants_tls_upgrade => Response::status(StatusCode::UPGRADE_REQUIRED),
@@ -584,6 +727,7 @@ fn ipp_dispatch(
     mime: &Arc<mime_db::MimeDb>,
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
+    encrypted: bool,
 ) -> Response {
     let Ok((msg, consumed)) = ipp_codec::decode(req.body.as_bytes()) else {
         log_access(&**log, host, req, 400, 0, "-", "-");
@@ -592,6 +736,13 @@ fn ipp_dispatch(
     let document = &req.body.as_bytes()[consumed..];
     let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref());
     ctx.is_local = local;
+    ctx.is_encrypted = encrypted;
+    // httpGetHostname: prefer the request's Host header for generated URIs.
+    if let Some(h) = req.headers.get("host") {
+        ctx.hostname = h.split(':').next().unwrap_or(h).to_string();
+    } else {
+        ctx.hostname = hostname();
+    }
     ctx.document = document;
     ctx.server_root = server_root.to_path_buf();
     ctx.client_addr = client_addr;
@@ -773,4 +924,12 @@ fn schedule_tick(
             );
         }
     }
+}
+
+/// Local host FQDN for cert CN / generated URIs when no Host header.
+fn hostname() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "localhost".into())
 }

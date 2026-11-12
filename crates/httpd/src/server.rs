@@ -62,21 +62,19 @@ impl Default for ServerOptions {
 /// # Errors
 /// `Disconnect` on clean EOF, `Io` on transport failure, `BadRequest`
 /// when the peer sends unrecoverable garbage (a 4xx was written first).
-pub async fn serve_connection<R, W>(
-    r: &mut R,
-    w: &mut W,
+pub async fn serve_connection<S>(
+    stream: &mut S,
     opts: &ServerOptions,
     mut handler: impl FnMut(Request) -> Response + Send,
 ) -> Result<(), ServeError>
 where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut buf = Vec::with_capacity(16 * 1024);
     let mut bad = 0u32;
 
     loop {
-        let mut req = match read_request(r, &mut buf, opts.idle_timeout).await {
+        let mut req = match read_request(stream, &mut buf, opts.idle_timeout).await {
             Ok(Some(req)) => req,
             Ok(None) => return Ok(()), // clean EOF between requests
             Err(e @ ServeError::Disconnect) => return Err(e),
@@ -84,7 +82,7 @@ where
             Err(ServeError::BadRequest(_)) => {
                 bad += 1;
                 let resp = Response::status(StatusCode::BAD_REQUEST);
-                write_response(w, &resp, false, false).await?;
+                write_response(stream, &resp, false, false).await?;
                 if bad >= opts.max_bad_requests {
                     return Err(ServeError::BadRequest("too many bad requests"));
                 }
@@ -95,23 +93,23 @@ where
         // Host required on HTTP/1.1 (upstream rejects with 400).
         if req.version == HttpVersion::V11 && req.headers.get("host").is_none() {
             let resp = Response::status(StatusCode::BAD_REQUEST);
-            write_response(w, &resp, false, req.keep_alive).await?;
+            write_response(stream, &resp, false, req.keep_alive).await?;
             continue;
         }
         if req.version == HttpVersion::Other {
             let resp = Response::status(StatusCode::VERSION_NOT_SUPPORTED);
-            write_response(w, &resp, false, false).await?;
+            write_response(stream, &resp, false, false).await?;
             return Ok(());
         }
 
         // Frame + buffer the body (emits 100-continue when requested).
-        let body_res = read_body(r, w, &mut buf, &mut req, opts.max_body).await;
+        let body_res = read_body(stream, &mut buf, &mut req, opts.max_body).await;
         if let Err(e) = body_res {
             let resp = Response::status(match e {
                 ServeError::BadRequest(m) if m.contains("large") => StatusCode::TOO_LARGE,
                 _ => StatusCode::BAD_REQUEST,
             });
-            let _ = write_response(w, &resp, false, false).await;
+            let _ = write_response(stream, &resp, false, false).await;
             return Err(e);
         }
 
@@ -123,10 +121,10 @@ where
         resp.headers.set("Server", opts.server_tokens.clone());
         if resp.status == StatusCode::SWITCHING_PROTOCOLS {
             // RFC 2817: write the 101 and hand the transport back.
-            write_response(w, &resp, false, true).await?;
+            write_response(stream, &resp, false, true).await?;
             return Err(ServeError::Disconnect);
         }
-        write_response(w, &resp, head_only, keep).await?;
+        write_response(stream, &resp, head_only, keep).await?;
         if !keep {
             return Ok(());
         }
@@ -251,9 +249,8 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
 ///
 /// Emits `100 Continue` first if the client asked. `max_body == 0`
 /// means unlimited (upstream `MaxRequestSize 0`).
-pub async fn read_body<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
-    r: &mut R,
-    w: &mut W,
+pub async fn read_body<S: AsyncRead + AsyncWrite + Unpin>(
+    s: &mut S,
     buf: &mut Vec<u8>,
     req: &mut Request,
     max_body: usize,
@@ -275,16 +272,16 @@ pub async fn read_body<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
             .get("expect")
             .is_some_and(|v| v.eq_ignore_ascii_case("100-continue"))
         {
-            w.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
-            w.flush().await?;
+            s.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await?;
+            s.flush().await?;
         }
         let limit = if max_body == 0 { usize::MAX } else { max_body };
         let body = if is_chunked {
-            read_chunked(r, buf, limit).await?
+            read_chunked(s, buf, limit).await?
         } else if let Some(len) = content_length {
-            read_exact_n(r, buf, len.min(limit)).await?
+            read_exact_n(s, buf, len.min(limit)).await?
         } else {
-            read_to_eof(r, buf, limit).await?
+            read_to_eof(s, buf, limit).await?
         };
         req.body = Body::Bytes(body);
     }
