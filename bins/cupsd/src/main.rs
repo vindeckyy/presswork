@@ -18,6 +18,7 @@ use tokio::net::{TcpListener, UnixListener};
 
 use cups_config::{Config, Diagnostic, ListenAddr, Paths, Severity};
 use httpd::{Method, Request, Response, StatusCode};
+use printer::Registry;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -109,7 +110,7 @@ fn main() -> std::process::ExitCode {
         .enable_all()
         .build()
         .expect("tokio runtime");
-    rt.block_on(run(outcome.config, args))
+    rt.block_on(run(outcome.config, args, paths))
 }
 
 fn emit_diagnostics(ds: &[Diagnostic]) {
@@ -123,7 +124,8 @@ fn emit_diagnostics(ds: &[Diagnostic]) {
     }
 }
 
-async fn run(cfg: Config, _args: Args) -> std::process::ExitCode {
+async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
+    let cfg = Arc::new(cfg);
     let opts = Arc::new(httpd::ServerOptions {
         server_tokens: cfg.cupsd.server_header.clone(),
         max_body: usize::try_from(cfg.cupsd.max_request_size).unwrap_or(usize::MAX),
@@ -139,6 +141,50 @@ async fn run(cfg: Config, _args: Args) -> std::process::ExitCode {
             .unwrap_or("/usr/share/cups/doc-root"),
     );
 
+    // Registry: load printers.conf (+ classes.conf uses same parser).
+    let mut registry = Registry::default();
+    registry.next_printer_id = 1;
+    registry.next_job_id = 1;
+    let proot = PathBuf::from(
+        cfg.files
+            .request_root
+            .as_deref()
+            .unwrap_or("/var/spool/cups"),
+    );
+    let proot = proot.parent().unwrap_or(&proot).to_path_buf();
+    for f in ["printers.conf", "classes.conf"] {
+        let p = paths.server_root.join(f);
+        match registry.load_printers_file(&p) {
+            Ok(errs) => {
+                for e in errs {
+                    eprintln!("cupsd: {e}");
+                }
+            }
+            Err(e) => eprintln!("cupsd: cannot read {}: {e}", p.display()),
+        }
+    }
+    let _ = proot;
+    let registry = std::sync::Arc::new(std::sync::RwLock::new(registry));
+
+    // Log sinks — error_log always (foreground → stderr), access_log
+    // when configured.
+    let log = Arc::new(Logs {
+        error: cfg
+            .files
+            .error_log
+            .as_deref()
+            .map_or_else(|| cups_log::Sink::stderr(), cups_log::Sink::file),
+        access: cfg
+            .files
+            .access_log
+            .as_deref()
+            .map_or_else(|| cups_log::Sink::stderr(), cups_log::Sink::file),
+        time_fmt: match cfg.cupsd.log_time_format {
+            cups_config::LogTimeFormat::Usecs => cups_log::TimeFormat::Usecs,
+            _ => cups_log::TimeFormat::Standard,
+        },
+    });
+
     // Bind all listeners.
     let mut join = tokio::task::JoinSet::new();
     let mut bound = 0usize;
@@ -147,29 +193,62 @@ async fn run(cfg: Config, _args: Args) -> std::process::ExitCode {
             ListenAddr::Tcp(addr) => match TcpListener::bind(addr).await {
                 Ok(l) => {
                     bound += 1;
-                    eprintln!(
-                        "cupsd: listening on {addr}{}",
-                        if ln.ssl { " (TLS)" } else { "" }
+                    log.err(
+                        cups_log::Level::Info,
+                        format!(
+                            "Listening for client connections on {addr}{}",
+                            if ln.ssl { " (TLS)" } else { "" }
+                        ),
                     );
-                    join.spawn(accept_tcp(l, ln.ssl, opts.clone(), doc_root.clone()));
+                    join.spawn(accept_tcp(
+                        l,
+                        ln.ssl,
+                        opts.clone(),
+                        doc_root.clone(),
+                        registry.clone(),
+                        cfg.clone(),
+                        log.clone(),
+                    ));
                 }
-                Err(e) => eprintln!("cupsd: cannot bind {addr}: {e}"),
+                Err(e) => log.err(
+                    cups_log::Level::Error,
+                    format!("Unable to open listen socket for address {addr} - {e}"),
+                ),
             },
             ListenAddr::Unix(path) => match bind_unix(path) {
                 Ok(l) => {
                     bound += 1;
-                    eprintln!("cupsd: listening on {}", path.display());
-                    join.spawn(accept_unix(l, opts.clone(), doc_root.clone()));
+                    log.err(
+                        cups_log::Level::Info,
+                        format!("Listening for client connections on {}.", path.display()),
+                    );
+                    join.spawn(accept_unix(
+                        l,
+                        opts.clone(),
+                        doc_root.clone(),
+                        registry.clone(),
+                        cfg.clone(),
+                        log.clone(),
+                    ));
                 }
-                Err(e) => eprintln!("cupsd: cannot bind {}: {e}", path.display()),
+                Err(e) => log.err(
+                    cups_log::Level::Error,
+                    format!(
+                        "Unable to open listen socket for address {} - {e}",
+                        path.display()
+                    ),
+                ),
             },
         }
     }
     if bound == 0 {
-        eprintln!("cupsd: no listeners bound, exiting");
+        log.err(cups_log::Level::Error, "No listeners bound, exiting.");
         return std::process::ExitCode::from(1);
     }
-    eprintln!("cupsd {VERSION}: ready on {bound} listener(s)");
+    log.err(
+        cups_log::Level::Info,
+        format!("cupsd {VERSION} ready on {bound} listener(s)"),
+    );
 
     let mut sigint =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).expect("signal");
@@ -181,7 +260,7 @@ async fn run(cfg: Config, _args: Args) -> std::process::ExitCode {
         _ = join.join_next() => {}
     }
     join.abort_all();
-    eprintln!("cupsd: shutdown");
+    log.err(cups_log::Level::Info, "Scheduler shutting down.");
     std::process::ExitCode::SUCCESS
 }
 
@@ -203,14 +282,28 @@ async fn accept_tcp(
     ssl: bool,
     opts: Arc<httpd::ServerOptions>,
     doc_root: PathBuf,
+    registry: Arc<std::sync::RwLock<Registry>>,
+    cfg: Arc<Config>,
+    log: Arc<Logs>,
 ) {
     let _ = ssl; // TLS acceptor lands with cups-tls (P5)
     loop {
         match listener.accept().await {
-            Ok((stream, _peer)) => {
+            Ok((stream, peer)) => {
                 let opts = opts.clone();
                 let doc_root = doc_root.clone();
-                tokio::spawn(async move { serve_one(stream, opts, doc_root).await });
+                let registry = registry.clone();
+                let cfg = cfg.clone();
+                let local = peer.ip().is_loopback();
+                let port = stream.local_addr().map(|a| a.port()).unwrap_or(631);
+                let host = peer.ip().to_string();
+                let log = log.clone();
+                tokio::spawn(async move {
+                    serve_one(
+                        stream, opts, doc_root, registry, cfg, port, local, log, host,
+                    )
+                    .await;
+                });
             }
             Err(e) => {
                 eprintln!("cupsd: accept: {e}");
@@ -220,13 +313,36 @@ async fn accept_tcp(
     }
 }
 
-async fn accept_unix(listener: UnixListener, opts: Arc<httpd::ServerOptions>, doc_root: PathBuf) {
+async fn accept_unix(
+    listener: UnixListener,
+    opts: Arc<httpd::ServerOptions>,
+    doc_root: PathBuf,
+    registry: Arc<std::sync::RwLock<Registry>>,
+    cfg: Arc<Config>,
+    log: Arc<Logs>,
+) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let opts = opts.clone();
                 let doc_root = doc_root.clone();
-                tokio::spawn(async move { serve_one(stream, opts, doc_root).await });
+                let registry = registry.clone();
+                let cfg = cfg.clone();
+                let log = log.clone();
+                tokio::spawn(async move {
+                    serve_one(
+                        stream,
+                        opts,
+                        doc_root,
+                        registry,
+                        cfg,
+                        631,
+                        true,
+                        log,
+                        "localhost".to_string(),
+                    )
+                    .await;
+                });
             }
             Err(e) => {
                 eprintln!("cupsd: unix accept: {e}");
@@ -236,19 +352,54 @@ async fn accept_unix(listener: UnixListener, opts: Arc<httpd::ServerOptions>, do
     }
 }
 
-async fn serve_one<S>(stream: S, opts: Arc<httpd::ServerOptions>, doc_root: PathBuf)
-where
+async fn serve_one<S>(
+    stream: S,
+    opts: Arc<httpd::ServerOptions>,
+    doc_root: PathBuf,
+    registry: Arc<std::sync::RwLock<Registry>>,
+    cfg: Arc<Config>,
+    port: u16,
+    local: bool,
+    log: Arc<Logs>,
+    host: String,
+) where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
     let (mut rd, mut wr) = split(stream);
     let _ = httpd::serve_connection(&mut rd, &mut wr, &opts, move |req| {
-        dispatch(&req, &doc_root)
+        dispatch_req(&req, &doc_root, &registry, &cfg, port, local, &log, &host)
     })
     .await;
 }
 
-/// P0 request dispatch.
-fn dispatch(req: &Request, doc_root: &Path) -> Response {
+/// Error + access log sinks shared per-request.
+struct Logs {
+    error: cups_log::Sink,
+    access: cups_log::Sink,
+    time_fmt: cups_log::TimeFormat,
+}
+
+impl Logs {
+    /// `cupsdWriteErrorLog()` — error_log line (mirrors `E [time] msg`),
+    /// echoed to stderr like upstream's foreground mode.
+    fn err(&self, level: cups_log::Level, msg: impl AsRef<str>) {
+        let line = cups_log::error_line(level, self.time_fmt, msg.as_ref());
+        self.error.write(&line);
+        eprintln!("cupsd: {}", msg.as_ref());
+    }
+}
+
+/// Request dispatch: static files, IPP ops, misc.
+fn dispatch_req(
+    req: &Request,
+    doc_root: &Path,
+    registry: &std::sync::RwLock<Registry>,
+    cfg: &Config,
+    port: u16,
+    local: bool,
+    log: &Logs,
+    host: &str,
+) -> Response {
     match req.method {
         Method::Get | Method::Head => static_get(&req.uri, doc_root),
         Method::Post
@@ -260,12 +411,49 @@ fn dispatch(req: &Request, doc_root: &Path) -> Response {
                     .eq_ignore_ascii_case("application/ipp")
             }) =>
         {
-            ipp_stub(req)
+            ipp_dispatch(req, registry, cfg, port, local, log, host)
         }
         Method::Options if req.wants_tls_upgrade => Response::status(StatusCode::UPGRADE_REQUIRED),
-        Method::Options => Response::status(StatusCode::OK),
-        _ => Response::status(StatusCode::NOT_IMPLEMENTED),
+        Method::Options => {
+            log_access(log, host, req, 200, 0, "-", "-");
+            Response::status(StatusCode::OK)
+        }
+        _ => {
+            log_access(log, host, req, 501, 0, "-", "-");
+            Response::status(StatusCode::NOT_IMPLEMENTED)
+        }
     }
+}
+
+/// `cupsdLogRequest()` — access_log line after serving.
+fn log_access(
+    log: &Logs,
+    host: &str,
+    req: &Request,
+    code: u16,
+    bytes: u64,
+    op_name: &str,
+    status_name: &str,
+) {
+    let (maj, min) = match req.version {
+        httpd::HttpVersion::V09 => (0, 9),
+        httpd::HttpVersion::V10 => (1, 0),
+        _ => (1, 1),
+    };
+    let line = cups_log::access_line(
+        host,
+        None,
+        log.time_fmt,
+        req.method.as_str(),
+        &req.uri,
+        (maj, min),
+        code,
+        bytes,
+        op_name,
+        status_name,
+        None,
+    );
+    log.access.write(&line);
 }
 
 fn static_get(uri: &str, doc_root: &Path) -> Response {
@@ -297,20 +485,33 @@ fn mime_guess(p: &Path) -> &'static str {
     }
 }
 
-/// Decode the IPP request and answer in-band: same version + request-id,
-/// `server-error-internal-error` — the shape a client sees from real
-/// cupsd for an op it can't service, so `ipptool` framing tests pass.
-fn ipp_stub(req: &Request) -> Response {
-    match ipp_codec::decode(req.body.as_bytes()) {
-        Ok((msg, _consumed)) => {
-            let mut out = ipp_codec::IppMessage::new(ipp_codec::ops::status::ERROR_INTERNAL);
-            out.request_id = msg.request_id;
-            out.version = msg.version;
-            match ipp_codec::encode(&out) {
-                Ok(b) => Response::ipp(StatusCode::OK, b),
-                Err(_) => Response::status(StatusCode::INTERNAL),
-            }
+/// Decode the IPP request, run the op dispatcher, re-encode the
+/// response — the `cupsdProcessIPPRequest` equivalent.
+fn ipp_dispatch(
+    req: &Request,
+    registry: &std::sync::RwLock<Registry>,
+    cfg: &Config,
+    port: u16,
+    local: bool,
+    log: &Logs,
+    host: &str,
+) -> Response {
+    let Ok((msg, _)) = ipp_codec::decode(req.body.as_bytes()) else {
+        log_access(log, host, req, 400, 0, "-", "-");
+        return Response::status(StatusCode::BAD_REQUEST);
+    };
+    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
+    let mut ctx = ops::Ctx::new(&reg, cfg, port);
+    ctx.is_local = local;
+    let resp = ops::dispatch(&msg, &ctx);
+    let op_name = ipp_codec::ops::op::name(msg.code);
+    let status_name = ipp_codec::ops::status::name(resp.code);
+    match ipp_codec::encode(&resp) {
+        Ok(b) => {
+            let n = b.len() as u64;
+            log_access(log, host, req, 200, n, op_name, status_name);
+            Response::ipp(StatusCode::OK, b)
         }
-        Err(_) => Response::status(StatusCode::BAD_REQUEST),
+        Err(_) => Response::status(StatusCode::INTERNAL),
     }
 }

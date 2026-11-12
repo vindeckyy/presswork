@@ -9,3 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+ipp-codec = { path = "../ipp-codec" }
+time = { version = "0.3", features = ["local-offset", "formatting"] }

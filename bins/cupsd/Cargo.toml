@@ -10,8 +10,11 @@ workspace = true
 
 [dependencies]
 cups-config = { path = "../../crates/cups-config" }
+cups-log = { path = "../../crates/cups-log" }
 httpd = { path = "../../crates/httpd" }
 ipp-codec = { path = "../../crates/ipp-codec" }
+ops = { path = "../../crates/ops" }
+printer = { path = "../../crates/printer" }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "signal", "fs", "io-util", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

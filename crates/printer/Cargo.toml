@@ -9,3 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+cups-config = { path = "../cups-config" }
+ipp-codec = { path = "../ipp-codec" }
+thiserror = "2"
