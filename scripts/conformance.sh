@@ -110,6 +110,16 @@ stop() {
     for pid in $(ss -tlnpH "sport = :$PWPORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
         kill "$pid" 2>/dev/null || true
     done
+    # Kill every cupsd launched from this root — an orphaned daemon can hold
+    # the unix socket without holding the port, and would otherwise shadow a
+    # fresh daemon on the same socket path.
+    for pid in $(pgrep -f "$PWROOT/cupsd" 2>/dev/null); do
+        kill "$pid" 2>/dev/null || true
+    done
+    for pid in $(ss -lxnpH "path $PWROOT/run/cups.sock" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
+        kill "$pid" 2>/dev/null || true
+    done
+    rm -f "$PWROOT/run/cups.sock"
     sleep 1
 }
 

@@ -781,8 +781,34 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         );
         return;
     };
+    // `job-uri` targets a single job — `…/jobs/<id>`; a bare `/jobs` or an
+    // unparseable id is `client-error-bad-request` (upstream `get_jobs`).
+    let is_job_uri = uri_attr.is_some_and(|a| a.name.as_str().eq_ignore_ascii_case("job-uri"));
+    let jobs = ctx
+        .jobs
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let only_job: Option<i32> = if is_job_uri {
+        let Some(id) = uri
+            .rsplit('/')
+            .next()
+            .filter(|_| uri.contains("/jobs/"))
+            .and_then(|s| s.parse::<i32>().ok())
+        else {
+            send_status(resp, status::ERROR_BAD_REQUEST, "Bad \"job-uri\" attribute.");
+            return;
+        };
+        Some(id)
+    } else {
+        None
+    };
     let reg = ctx.reg();
-    let Some((p, _)) = reg.validate_dest(&uri) else {
+    // For `job-uri` the destination is the job's own printer; for
+    // `printer-uri` the URI names it.
+    let dest_for_validate = only_job
+        .and_then(|id| jobs.get(id).map(|j| j.dest.clone()))
+        .unwrap_or_else(|| uri.clone());
+    let Some((p, _)) = reg.validate_dest(&dest_for_validate) else {
         send_status(
             resp,
             status::ERROR_NOT_FOUND,
@@ -812,15 +838,14 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
     } else {
         None
     };
-    let jobs = ctx
-        .jobs
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // `requested-attributes` absent → the RFC default is just
     // `job-id`+`job-uri`, not the full attribute set.
     let ra = requested_attrs(req).or_else(|| Some(vec!["job-id".into(), "job-uri".into()]));
     let mut emitted = 0;
     for j in jobs.for_printer(&p.name) {
+        if only_job.is_some_and(|id| j.id != id) {
+            continue;
+        }
         if emitted >= limit {
             break;
         }
