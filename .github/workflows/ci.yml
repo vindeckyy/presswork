@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         # MSRV floor + current stable — distro build range.
-        toolchain: ["1.75.0", stable]
+        toolchain: ["1.88.0", stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -33,7 +33,7 @@ jobs:
       - name: test
         run: cargo test --workspace --locked
       - name: config self-check
-        run: cargo run -p cupsd -- -t -c cupsd.conf.example || true
+        run: cargo run -p cupsd -- -t -c etc/cupsd.conf.example
 
   forbid-unsafe:
     name: unsafe confined to sys
@@ -80,6 +80,8 @@ jobs:
   conformance:
     name: ipptool conformance (upstream suite)
     runs-on: ubuntu-latest
+    env:
+      IPPTESTS: /tmp/cups-ref/examples
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -89,7 +91,10 @@ jobs:
       - name: fetch ipptool + test corpus
         run: |
           sudo apt-get update
-          sudo apt-get install -y cups ipptool cups-ipp-utils || true
+          sudo apt-get install -y cups-ipp-utils
+          # The `.test`/`.drv` corpus is not packaged — pull it from the
+          # upstream CUPS tree (examples/ holds the ipptool matrix).
+          git clone --depth 1 https://github.com/OpenPrinting/cups /tmp/cups-ref
       - name: run daemon in scratch root
         run: |
           ./scripts/conformance.sh --bootstrap

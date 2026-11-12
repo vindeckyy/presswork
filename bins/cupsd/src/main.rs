@@ -39,6 +39,7 @@ fn usage() -> &'static str {
 #[derive(Debug, Default, Clone)]
 struct Args {
     server_root: Option<PathBuf>,
+    cupsd_conf: Option<PathBuf>,
     test_config: bool,
     foreground: bool,
     on_demand: bool,
@@ -52,6 +53,7 @@ fn parse_args() -> Result<Option<Args>, i32> {
         match s.as_ref() {
             "-c" => {
                 let p = it.next().map(PathBuf::from);
+                a.cupsd_conf = p.clone();
                 a.server_root = p.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
             }
             "-s" => {
@@ -89,7 +91,10 @@ fn main() -> std::process::ExitCode {
         Err(c) => return std::process::ExitCode::from(u8::try_from(c).unwrap_or(1)),
     };
 
-    let paths = Paths::resolve(args.server_root.as_deref());
+    let mut paths = Paths::resolve(args.server_root.as_deref());
+    if let Some(f) = &args.cupsd_conf {
+        paths.cupsd_conf = f.clone();
+    }
     let outcome = cups_config::load(&paths);
     emit_diagnostics(&outcome.diagnostics);
 
