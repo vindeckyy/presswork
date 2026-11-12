@@ -395,6 +395,7 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
             || x == op::CUPS_GET_CLASSES
             || x == op::CUPS_GET_DEVICES
             || x == op::CUPS_GET_PPDS
+            || x == op::CUPS_GET_PPD
             || x == op::GET_NOTIFICATIONS
             || x == op::GET_SUBSCRIPTIONS
             || x == op::GET_SUBSCRIPTION_ATTRIBUTES
@@ -535,13 +536,8 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::RENEW_SUBSCRIPTION) => renew_subscription(req, resp, ctx),
         x if x == u32::from(op::CANCEL_SUBSCRIPTION) => cancel_subscription(req, resp, ctx),
         x if x == u32::from(op::GET_NOTIFICATIONS) => get_notifications(req, resp, ctx),
-        x if x == u32::from(op::CUPS_GET_PPDS) => {
-            send_status(
-                resp,
-                status::ERROR_OPERATION_NOT_SUPPORTED,
-                "CUPS-Get-PPDs not supported.",
-            );
-        }
+        x if x == u32::from(op::CUPS_GET_PPDS) => get_ppds(req, resp, ctx),
+        x if x == u32::from(op::CUPS_GET_PPD) => get_ppd(req, resp, ctx),
         x => {
             send_status(
                 resp,
@@ -1768,6 +1764,131 @@ fn quoted_fields(s: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// `get_ppds()` — `CUPS-Get-PPDs`. Runs `cups-driverd list` and emits a
+/// `ppd-*` attribute set per driver record, honoring the request's filters
+/// (`limit`, `include-schemes`, `exclude-schemes`, `ppd-make`, `ppd-product`).
+/// Driverless-first: ships the IPP Everywhere model plus any `.ppd` files
+/// under the configured PPD dir (P7).
+fn get_ppds(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let driverd = ctx.server_bin.join("daemon").join("cups-driverd");
+    // Pass the request's filter attributes through to driverd as `name=value`
+    // options — mirrors upstream `get_ppds` URL-encoding them into the command.
+    let mut opts = String::new();
+    for name in [
+        "ppd-device-id",
+        "ppd-natural-language",
+        "ppd-make",
+        "ppd-make-and-model",
+        "ppd-product",
+        "ppd-psversion",
+        "ppd-type",
+        "include-schemes",
+        "exclude-schemes",
+    ] {
+        if let Some(v) = req.find(tags::OPERATION, name).and_then(attr_text) {
+            opts.push_str(&format!("{name}={v} "));
+        }
+    }
+    let limit = int_attr(req, "limit").unwrap_or(0).to_string();
+    let out = std::process::Command::new(&driverd)
+        .args(["list", "0", &limit, opts.trim()])
+        .env(
+            "PPDDIR",
+            ctx.server_bin
+                .parent()
+                .map(|p| p.join("ppd").to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/usr/share/ppd".into()),
+        )
+        .output();
+    let Ok(out) = out else {
+        send_status(resp, status::ERROR_INTERNAL, "cannot run cups-driverd");
+        return;
+    };
+    resp.code = status::OK;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // `ppd "name" "make-and-model" "device-id" "product" "psversion" "scheme"`
+        let Some(rest) = line.strip_prefix("ppd ") else {
+            continue;
+        };
+        let q = quoted_fields(rest);
+        let name = q.first().cloned().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        // Each PPD gets its own response group — upstream `ippAddSeparator`.
+        let g = resp.new_group_mut(tags::PRINTER);
+        let attrs = [
+            ("ppd-name", tags::NAME, name.clone()),
+            ("ppd-make-and-model", tags::TEXT, q.get(1).cloned().unwrap_or_default()),
+            ("ppd-device-id", tags::TEXT, q.get(2).cloned().unwrap_or_default()),
+            ("ppd-product", tags::TEXT, q.get(3).cloned().unwrap_or_default()),
+            ("ppd-psversion", tags::TEXT, q.get(4).cloned().unwrap_or_default()),
+            ("ppd-type", tags::KEYWORD, q.get(5).cloned().unwrap_or_default()),
+            ("ppd-natural-language", tags::LANGUAGE, "en".to_string()),
+        ];
+        for (an, tag, av) in attrs {
+            if av.is_empty() {
+                continue;
+            }
+            g.attributes.push(Attribute::new(an, tag, vec![scalar_value(tag, av.clone())]));
+        }
+    }
+}
+
+/// `get_ppd()` — `CUPS-Get-PPD`. Runs `cups-driverd cat <ppd-name>` and returns
+/// the PPD file bytes as the response document body (upstream `get_ppd` does
+/// the same via `cupsdSendCommand`).
+fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let driverd = ctx.server_bin.join("daemon").join("cups-driverd");
+    // The PPD to fetch: a `ppd-name` op attr, else resolve the printer's
+    // PPD from `printer-uri` (driverless queues synthesize `everywhere`).
+    let name = req
+        .find(tags::OPERATION, "ppd-name")
+        .and_then(attr_text)
+        .or_else(|| {
+            req.find(tags::OPERATION, "printer-uri")
+                .and_then(attr_text)
+                .and_then(|u| {
+                    ctx.reg().validate_dest(&u).map(|_| "everywhere".to_string())
+                })
+        });
+    let Some(name) = name else {
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "No PPD name or printer PPD.",
+        );
+        return;
+    };
+    let out = std::process::Command::new(&driverd)
+        .args(["cat", &name])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            resp.code = status::OK;
+            resp.document = o.stdout;
+        }
+        _ => send_status(resp, status::ERROR_NOT_FOUND, format!("PPD \"{name}\" not found.")),
+    }
+}
+
+/// `scalar_value()` — build a single `Value` of the right variant for `tag`.
+fn scalar_value(tag: u8, s: String) -> Value {
+    if tag == tags::URI {
+        Value::Uri(s.into())
+    } else if tag == tags::NAME {
+        Value::Name(s.into())
+    } else if tag == tags::KEYWORD {
+        Value::Keyword(s.into())
+    } else if tag == tags::LANGUAGE {
+        Value::NaturalLanguage(s.into())
+    } else if tag == tags::CHARSET {
+        Value::Charset(s.into())
+    } else {
+        Value::Text(s.into())
+    }
 }
 
 // ==================== P4: admin operations ====================

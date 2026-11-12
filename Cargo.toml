@@ -29,6 +29,7 @@ members = [
     "bins/cupsd",
     "bins/cups-lpd",
     "bins/cups-deviced",
+    "bins/cups-driverd",
     "bins/cupsfilter",
     "bins/cups-exec",
     "bins/backends/socket",
