@@ -110,14 +110,18 @@ stop() {
     for pid in $(ss -tlnpH "sport = :$PWPORT" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
         kill "$pid" 2>/dev/null || true
     done
-    # Kill every cupsd launched from this root — an orphaned daemon can hold
-    # the unix socket without holding the port, and would otherwise shadow a
-    # fresh daemon on the same socket path.
-    for pid in $(pgrep -f "$PWROOT/cupsd" 2>/dev/null); do
-        kill "$pid" 2>/dev/null || true
-    done
-    for pid in $(ss -lxnpH "path $PWROOT/run/cups.sock" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
-        kill "$pid" 2>/dev/null || true
+    # Kill every cupsd running from this root — daemons launched with cwd
+    # PWROOT are identified by /proc/<pid>/cwd (still resolvable, marked
+    # "deleted", after rm -rf). Orphans otherwise keep holding the unix
+    # socket and shadow fresh daemons on the same path.
+    for pid in /proc/[0-9]*/cwd; do
+        pid="${pid%/cwd}"
+        pid="${pid#/proc/}"
+        [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$PWROOT" ] || \
+        [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$PWROOT (deleted)" ] || continue
+        case "$(readlink "/proc/$pid/exe" 2>/dev/null)" in
+            *cupsd*) kill "$pid" 2>/dev/null || true ;;
+        esac
     done
     rm -f "$PWROOT/run/cups.sock"
     sleep 1
