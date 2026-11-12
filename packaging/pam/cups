@@ -1,0 +1,4 @@
+# presswork PAM service — backs `DefaultAuthType Basic` auth for admin ops,
+# matching upstream cupsd's PAM-backed password verification.
+auth    required  pam_unix.so
+account required  pam_unix.so

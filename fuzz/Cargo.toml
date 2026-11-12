@@ -11,6 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 ipp-codec = { path = "../crates/ipp-codec" }
 cups-config = { path = "../crates/cups-config" }
+mime-db = { path = "../crates/mime-db" }
+printer = { path = "../crates/printer" }
 
 [[bin]]
 name = "ipp_decode"
@@ -21,6 +23,18 @@ doc = false
 [[bin]]
 name = "config_lexer"
 path = "fuzz_targets/config_lexer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "mime_db"
+path = "fuzz_targets/mime_db.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "printers_conf"
+path = "fuzz_targets/printers_conf.rs"
 test = false
 doc = false
 

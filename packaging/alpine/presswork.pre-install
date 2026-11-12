@@ -1,0 +1,6 @@
+#!/bin/sh
+# Create the `lp` account like upstream cups.
+addgroup -S lp 2>/dev/null
+adduser -S -D -H -h /var/spool/cups -s /sbin/nologin -G lp -g "Printing system" lp 2>/dev/null
+addgroup lp lp 2>/dev/null
+exit 0

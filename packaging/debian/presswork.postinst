@@ -1,0 +1,27 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create the `lp` account/group like upstream cups-daemon.
+        if ! getent group lp >/dev/null; then
+            addgroup --system lp
+        fi
+        if ! getent passwd lp >/dev/null; then
+            adduser --system --ingroup lp --home /var/spool/cups \
+                --no-create-home --gecos "Printing system" lp
+        fi
+        # lpadmin group for @SYSTEM admin auth (Ubuntu/Debian convention).
+        if ! getent group lpadmin >/dev/null; then
+            addgroup --system lpadmin
+        fi
+        adduser lp lpadmin 2>/dev/null || true
+
+        # Ownership of the mutable state tree.
+        chown -R lp:lp /var/spool/cups /var/log/cups /var/cache/cups /run/cups 2>/dev/null || true
+        chmod 0700 /etc/cups/ssl 2>/dev/null || true
+        ;;
+esac
+
+#DEBHELPER#
+exit 0

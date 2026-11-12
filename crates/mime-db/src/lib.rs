@@ -123,7 +123,12 @@ impl MimeDb {
 
     /// Parse one `mime.types`-format file.
     pub fn load_types(&mut self, path: &Path) -> std::io::Result<()> {
-        for line in logical_lines(BufReader::new(File::open(path)?)) {
+        self.load_types_reader(BufReader::new(File::open(path)?))
+    }
+
+    /// Parse one `mime.types`-format stream (`mimeFileType` rules).
+    pub fn load_types_reader<R: BufRead>(&mut self, r: R) -> std::io::Result<()> {
+        for line in logical_lines(r) {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -164,7 +169,12 @@ impl MimeDb {
 
     /// Parse one `mime.convs`-format file.
     pub fn load_convs(&mut self, path: &Path) -> std::io::Result<()> {
-        for line in logical_lines(BufReader::new(File::open(path)?)) {
+        self.load_convs_reader(BufReader::new(File::open(path)?))
+    }
+
+    /// Parse one `mime.convs`-format stream (`mimeFilter` rules).
+    pub fn load_convs_reader<R: BufRead>(&mut self, r: R) -> std::io::Result<()> {
+        for line in logical_lines(r) {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;

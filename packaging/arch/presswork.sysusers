@@ -1,0 +1,5 @@
+# presswork runtime user/group — mirrors upstream CUPS' `lp` account.
+u lp - "Printing system" /var/spool/cups
+g lp -
+g lpadmin - - lp
+m lp lpadmin

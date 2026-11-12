@@ -8,6 +8,45 @@ ExecStart=/usr/sbin/cupsd -l
 Type=simple
 Restart=always
 
+# ---- presswork sandbox hardening -------------------------------------------
+# cupsd is a long-lived root daemon that spawns filter/backend children and
+# owns the network-facing IPP surface — the highest-value process to sandbox
+# on most systems. These directives are chosen to be *compatible with a print
+# spooler* (it must spawn children, reach the network, own the spool/config
+# tree, and open device nodes for the usb/parallel backends). Tune in a
+# drop-in (`systemctl edit cups`) if your deployment needs more or less.
+
+# Writable paths: the daemon writes printers.conf under /etc/cups and owns the
+# spool/log/cache/run trees; everything else under /usr /boot /etc is read-only.
+ProtectSystem=full
+ReadWritePaths=/etc/cups /var/spool/cups /var/log/cups /var/cache/cups /run/cups
+
+# Filters/backends read the spool and write to the device; they should not
+# need user home dirs. Print-to-file into $HOME uses the file backend against
+# the spool — flip to `false` here if your site relies on it.
+ProtectHome=read-only
+
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+
+# No filter/backend ever needs to gain privileges; argv is built without a
+# shell, so setuid escalation isn't in the threat model anyway.
+NoNewPrivileges=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+# Device backends (usb/parallel) open /dev nodes — keep real device access.
+PrivateDevices=false
+
+# The IPP/DNS-SD surface is unix+inet(+6)+netlink; nothing else is needed.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
 [Install]
 Also=cups.socket cups.path
 WantedBy=multi-user.target

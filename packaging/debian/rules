@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --workspace --release --frozen
+
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/presswork PROFILE=release \
+	    USER=lp GROUP=lp
+
+override_dh_auto_test:
+	# The conformance suite runs against a live daemon; run unit tests only.
+	cargo test --workspace --release --frozen
+
+override_dh_installsystemd:
+	dh_installsystemd --name=cups

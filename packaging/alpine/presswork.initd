@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+
+name="CUPS Scheduler (presswork)"
+description="print spooler and IPP scheduler"
+command="/usr/sbin/cupsd"
+command_args="-f"
+command_background="yes"
+pidfile="/run/cups/cupsd.pid"
+
+depend() {
+    need net
+    after firewall avahi-daemon
+}
+
+start_pre() {
+    checkpath -d -o lp:lp /run/cups /var/spool/cups /var/log/cups /var/cache/cups
+}
