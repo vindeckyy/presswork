@@ -66,6 +66,74 @@ pub fn name_of_uid(uid: u32) -> Option<String> {
     }
 }
 
+/// Group names a user belongs to (`getgrouplist` + `getgrgid`).
+pub fn groups_of(user: &str) -> Vec<String> {
+    use std::ffi::CString;
+    let Some(c) = CString::new(user).ok() else {
+        return Vec::new();
+    };
+    unsafe {
+        let pw = libc::getpwnam(c.as_ptr());
+        if pw.is_null() {
+            return Vec::new();
+        }
+        let mut n: libc::c_int = 0;
+        // size probe
+        libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, std::ptr::null_mut(), &mut n);
+        if n <= 0 {
+            n = 16;
+        }
+        let mut gids = vec![0u32; n as usize];
+        let mut got = n;
+        if libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, gids.as_mut_ptr(), &mut got) < 0 {
+            return Vec::new();
+        }
+        gids.truncate(got.max(0) as usize);
+        gids.iter()
+            .filter_map(|&gid| {
+                let g = libc::getgrgid(gid);
+                if g.is_null() {
+                    None
+                } else {
+                    Some(
+                        std::ffi::CStr::from_ptr((*g).gr_name)
+                            .to_string_lossy()
+                            .into_owned(),
+                    )
+                }
+            })
+            .collect()
+    }
+}
+
+/// Verify a local password against the shadow entry (`getspnam`+`crypt`).
+/// Returns `false` for unknown users or when shadow is unreadable (non-root).
+pub fn check_password(user: &str, pass: &str) -> bool {
+    use std::ffi::CString;
+    let (Some(cu), Some(cp)) = (CString::new(user).ok(), CString::new(pass).ok()) else {
+        return false;
+    };
+    unsafe {
+        let sp = libc::getspnam(cu.as_ptr());
+        if sp.is_null() {
+            return false;
+        }
+        #[link(name = ":libcrypt.so.1")]
+        extern "C" {
+            fn crypt(key: *const libc::c_char, salt: *const libc::c_char) -> *mut libc::c_char;
+        }
+        let hashed = crypt(cp.as_ptr(), (*sp).sp_pwdp);
+        if hashed.is_null() {
+            return false;
+        }
+        let got = std::ffi::CStr::from_ptr(hashed);
+        let want = std::ffi::CStr::from_ptr((*sp).sp_pwdp);
+        // constant-time compare
+        let (a, b) = (got.to_bytes(), want.to_bytes());
+        a.len() == b.len() && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

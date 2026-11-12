@@ -10,8 +10,8 @@ use crate::common::{copy_printer_attrs, new_response, requested_attrs, send_stat
 /// Per-request context — the pieces of global server state handlers
 /// consult (the `con`/`cupsd` globals in the C scheduler).
 pub struct Ctx<'a> {
-    /// Destination registry (shared, read-locked by the daemon).
-    pub registry: &'a Registry,
+    /// Destination registry (shared; admin ops take the write lock).
+    pub registry: &'a RwLock<Registry>,
     /// Remote hostname for generated URIs (`httpGetHostname`).
     pub hostname: String,
     /// Listen port for generated URIs.
@@ -67,13 +67,33 @@ pub struct Ctx<'a> {
     pub document: &'a [u8],
     /// Filename for the document (`document-name`/`job-name` fallback).
     pub document_name: String,
+    /// `CUPS_SERVERROOT` — printers.conf lives at `{root}/printers.conf`.
+    pub server_root: std::path::PathBuf,
+    /// Client IP for authz host masks.
+    pub client_addr: std::net::IpAddr,
+    /// Groups the authenticated user belongs to (`@SYSTEM` expansion).
+    pub user_groups: Vec<String>,
+    /// Configured policies for `authz::op_allowed`.
+    pub policy_defs: &'a [cups_config::Policy],
+    /// `SystemGroup` names (`@SYSTEM` maps here).
+    pub system_groups: Vec<String>,
 }
 
 impl<'a> Ctx<'a> {
+    /// Short-lived read guard on the registry.
+    pub fn reg(&self) -> std::sync::RwLockReadGuard<'_, Registry> {
+        self.registry.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Write guard on the registry (admin ops only).
+    pub fn reg_write(&self) -> std::sync::RwLockWriteGuard<'_, Registry> {
+        self.registry.write().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Build a context with config-derived defaults.
     #[must_use]
     pub fn new(
-        registry: &'a Registry,
+        registry: &'a RwLock<Registry>,
         cfg: &'a cups_config::Config,
         port: u16,
         jobs: &'a RwLock<Jobs>,
@@ -156,6 +176,7 @@ impl<'a> Ctx<'a> {
             max_events: cfg.cupsd.max_events,
             notifiers: Vec::new(),
             policies: cfg.cupsd.policies.iter().map(|p| p.name.clone()).collect(),
+            policy_defs: &cfg.cupsd.policies,
             sharing: cfg.cupsd.browsing && cfg.cupsd.browse_local_protocols.0 != 0,
             operations_supported: ops,
             strict: cfg.cupsd.strict_conformance,
@@ -176,6 +197,10 @@ impl<'a> Ctx<'a> {
                 .into(),
             document: &[],
             document_name: String::new(),
+            server_root: std::path::PathBuf::from("/etc/cups"),
+            client_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            user_groups: Vec::new(),
+            system_groups: cfg.files.system_group_names.clone(),
         }
     }
 }
@@ -328,6 +353,22 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::SEND_DOCUMENT) => send_document(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CANCEL_JOB) => cancel_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_JOB_ATTRIBUTES) => get_job_attributes(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CUPS_ADD_MODIFY_PRINTER) => {
+            add_modify_printer(req, resp, ctx, uri_attr)
+        }
+        x if x == u32::from(op::CUPS_DELETE_PRINTER) => delete_printer(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CUPS_SET_DEFAULT) => set_default(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::PAUSE_PRINTER) => set_printer_state(req, resp, ctx, uri_attr, 5),
+        x if x == u32::from(op::RESUME_PRINTER) => set_printer_state(req, resp, ctx, uri_attr, 3),
+        x if x == u32::from(op::CUPS_ACCEPT_JOBS) || x == u32::from(op::ENABLE_PRINTER) => {
+            set_accepting(req, resp, ctx, uri_attr, true)
+        }
+        x if x == u32::from(op::CUPS_REJECT_JOBS) || x == u32::from(op::DISABLE_PRINTER) => {
+            set_accepting(req, resp, ctx, uri_attr, false)
+        }
+        x if x == u32::from(op::SET_PRINTER_ATTRIBUTES) => {
+            set_printer_attributes(req, resp, ctx, uri_attr)
+        }
         x if x == u32::from(op::CUPS_GET_DEVICES) => get_devices(req, resp, ctx),
         x if x == u32::from(op::CUPS_GET_PPDS) => {
             send_status(
@@ -364,7 +405,8 @@ fn get_printer_attrs(
         );
         return;
     };
-    let Some((p, _is_class)) = ctx.registry.validate_dest(&uri) else {
+    let reg = ctx.reg();
+    let Some((p, _is_class)) = reg.validate_dest(&uri) else {
         send_status(
             resp,
             status::ERROR_NOT_FOUND,
@@ -388,7 +430,7 @@ fn get_printer_supported(resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Att
         );
         return;
     };
-    if ctx.registry.validate_dest(&uri).is_none() {
+    if ctx.reg().validate_dest(&uri).is_none() {
         send_status(
             resp,
             status::ERROR_NOT_FOUND,
@@ -413,7 +455,8 @@ fn get_printer_supported(resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Att
 
 /// `get_default()` — `CUPS-Get-Default`.
 fn get_default(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
-    let Some(p) = ctx.registry.default_printer() else {
+    let reg = ctx.reg();
+    let Some(p) = reg.default_printer() else {
         send_status(resp, status::ERROR_NOT_FOUND, "No default printer.");
         return;
     };
@@ -427,7 +470,7 @@ fn get_default(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
 /// printer-type, printer-type-mask, printer-location, user ACL,
 /// !local hides unshared).
 fn get_printers(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, want_class: i32) {
-    if ctx.registry.printers.is_empty() {
+    if ctx.reg().printers.is_empty() {
         send_status(resp, status::ERROR_NOT_FOUND, "No destinations added.");
         return;
     }
@@ -460,7 +503,8 @@ fn get_printers(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, want_class: 
     let ra = requested_attrs(req);
 
     // Start at first-printer-name when given (else BTree head).
-    let mut iter: Vec<&Printer> = ctx.registry.printers.values().collect();
+    let reg = ctx.reg();
+    let mut iter: Vec<&Printer> = reg.printers.values().collect();
     if let Some(first_name) = first {
         if let Some(pos) = iter.iter().position(|p| p.name == first_name) {
             iter = iter.split_off(pos);
@@ -486,8 +530,7 @@ fn get_printers(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, want_class: 
         if want_class == 0 && p.is_class() {
             continue;
         }
-        if i64::from(p.effective_ptype(ctx.registry.default.as_deref() == Some(p.name.as_str())))
-            & pt_mask
+        if i64::from(p.effective_ptype(reg.default.as_deref() == Some(p.name.as_str()))) & pt_mask
             != pt_filter
         {
             continue;
@@ -525,7 +568,8 @@ fn validate_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Op
         );
         return;
     };
-    let Some((p, _)) = ctx.registry.validate_dest(&uri) else {
+    let reg = ctx.reg();
+    let Some((p, _)) = reg.validate_dest(&uri) else {
         send_status(
             resp,
             status::ERROR_NOT_FOUND,
@@ -556,7 +600,8 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         );
         return;
     };
-    let Some((p, _)) = ctx.registry.validate_dest(&uri) else {
+    let reg = ctx.reg();
+    let Some((p, _)) = reg.validate_dest(&uri) else {
         send_status(
             resp,
             status::ERROR_NOT_FOUND,
@@ -627,7 +672,7 @@ fn valid_lang(s: &str) -> bool {
 /// Validates dest, spools `ctx.document` to `d%05d-001`, creates the job
 /// pending, and returns the job group.
 fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    let Some((p, _)) = validate_accepting(ctx, resp, uri_attr) else {
+    let Some((dest, _)) = validate_accepting(ctx, resp, uri_attr) else {
         return;
     };
     let format = req
@@ -657,7 +702,7 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
 
     let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
     let id = jobs.alloc_id();
-    let mut job = Job::new(id, p.name.clone(), user);
+    let mut job = Job::new(id, dest.clone(), user);
     job.title = title;
     job.copies = copies;
     job.format = format.clone();
@@ -692,7 +737,7 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
 
 /// `create_job()` — allocates an empty job awaiting Send-Document(s).
 fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    let Some((p, _)) = validate_accepting(ctx, resp, uri_attr) else {
+    let Some((dest, _)) = validate_accepting(ctx, resp, uri_attr) else {
         return;
     };
     let user = ctx
@@ -705,7 +750,7 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         .unwrap_or_else(|| "anonymous".into());
     let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
     let id = jobs.alloc_id();
-    let mut job = Job::new(id, p.name.clone(), user);
+    let mut job = Job::new(id, dest.clone(), user);
     job.state = job::JobState::PendingHeld; // awaiting documents
     job.reasons = vec!["job-data-insufficient".into()];
     job.title = req
@@ -816,25 +861,31 @@ fn get_job_attributes(
 
 // ---------- job helpers ----------
 
-/// Validate printer-uri exists + accepts jobs; returns the printer.
-fn validate_accepting<'r>(
-    ctx: &'r Ctx,
+/// Validate printer-uri exists + accepts jobs; returns `(queue-name, uri)`.
+fn validate_accepting(
+    ctx: &Ctx,
     resp: &mut IppMessage,
     uri_attr: Option<&Attribute>,
-) -> Option<(&'r Printer, String)> {
+) -> Option<(String, String)> {
     let Some(uri) = uri_attr.and_then(attr_text) else {
         send_status(resp, status::ERROR_BAD_REQUEST, "Missing \"printer-uri\".");
         return None;
     };
-    let Some((p, _)) = ctx.registry.validate_dest(&uri) else {
-        send_status(
-            resp,
-            status::ERROR_NOT_FOUND,
-            "The printer or class does not exist.",
-        );
-        return None;
+    let (name, accepting) = {
+        let reg = ctx.reg();
+        match reg.validate_dest(&uri) {
+            Some((p, _)) => (p.name.clone(), p.accepting),
+            None => {
+                send_status(
+                    resp,
+                    status::ERROR_NOT_FOUND,
+                    "The printer or class does not exist.",
+                );
+                return None;
+            }
+        }
     };
-    if !p.accepting {
+    if !accepting {
         send_status(
             resp,
             status::ERROR_NOT_ACCEPTING_JOBS,
@@ -842,7 +893,7 @@ fn validate_accepting<'r>(
         );
         return None;
     }
-    Some((p, uri))
+    Some((name, uri))
 }
 
 /// Resolve the job-id from `job-uri`/`job-id` attrs.
@@ -1009,4 +1060,354 @@ fn quoted_fields(s: &str) -> Vec<String> {
         }
     }
     out
+}
+
+// ==================== P4: admin operations ====================
+
+/// `authorize` — is this subject allowed `op` under the `default` policy?
+/// Localhost requests pass; remote go through `authz::op_allowed` against
+/// the configured `<Policy>` blocks (P4).
+fn authorize(ctx: &Ctx, resp: &mut IppMessage, op: u32) -> bool {
+    if ctx.is_local && ctx.system_groups.is_empty() {
+        return true; // local admin, no SystemGroup configured
+    }
+    let user = ctx.username.as_deref().or(ctx.requesting_user.as_deref());
+    let subj = authz::Subject {
+        user,
+        groups: &ctx.user_groups,
+        addr: ctx.client_addr,
+        host: &ctx.hostname,
+        encrypted: ctx.is_encrypted,
+    };
+    if authz::op_allowed(ctx.policy_defs, Some("default"), op, &subj) {
+        true
+    } else {
+        send_status(
+            resp,
+            status::ERROR_FORBIDDEN,
+            "You do not have permission to access this resource.",
+        );
+        false
+    }
+}
+
+/// Persist `printers.conf` after a registry mutation.
+fn save_printers(ctx: &Ctx) {
+    let reg = ctx.reg();
+    let bytes = reg.save_printers_conf();
+    drop(reg);
+    let path = ctx.server_root.join("printers.conf");
+    let tmp = path.with_extension("N");
+    if std::fs::write(&tmp, &bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// Resolve the queue name from `printer-uri` (`.../printers/NAME`).
+fn printer_name_from_uri(uri_attr: Option<&Attribute>) -> Option<String> {
+    uri_attr.and_then(attr_text).and_then(|u| {
+        u.rsplit("/printers/")
+            .next()
+            .map(str::to_string)
+            .filter(|n| !n.is_empty() && !n.contains('/'))
+    })
+}
+
+/// `add_modify_printer()` — `CUPS-Add-Modify-Printer` (0x4003).
+/// Creates the queue if absent, else updates the set attributes, then
+/// persists `printers.conf`.
+fn add_modify_printer(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    if !authorize(ctx, resp, u32::from(op::CUPS_ADD_MODIFY_PRINTER)) {
+        return;
+    }
+    let Some(name) = printer_name_from_uri(uri_attr) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-uri.");
+        return;
+    };
+    let pg = req.groups.iter().find(|g| g.tag == tags::PRINTER);
+    let attr = |n: &str| -> Option<&Attribute> {
+        pg.and_then(|g| g.find(n))
+            .or_else(|| req.find(tags::OPERATION, n))
+    };
+    let mut reg = ctx.reg_write();
+    let exists = reg.printers.contains_key(&name);
+    let device_uri = attr("device-uri")
+        .and_then(attr_text)
+        .unwrap_or_else(|| "file:///dev/null".into());
+    let mut p = if exists {
+        reg.printers.remove(&name).unwrap()
+    } else {
+        Printer::new(name.clone(), device_uri.clone())
+    };
+    if let Some(v) = attr("device-uri").and_then(attr_text) {
+        p.device_uri = v;
+    }
+    if let Some(v) = attr("printer-info").and_then(attr_text) {
+        p.info = Some(v);
+    }
+    if let Some(v) = attr("printer-location").and_then(attr_text) {
+        p.location = Some(v);
+    }
+    if let Some(v) = attr("printer-geo-location").and_then(attr_text) {
+        p.geo_location = Some(v);
+    }
+    if let Some(v) = attr("printer-make-and-model").and_then(attr_text) {
+        p.make_model = Some(v);
+    }
+    if let Some(v) = attr("printer-state").and_then(attr_int) {
+        p.state = v as i32;
+        p.state_time = printer::now();
+    }
+    if let Some(a) = attr("printer-is-accepting-jobs") {
+        if let Some(Value::Boolean(b)) = a.values.first() {
+            p.accepting = *b;
+        }
+    }
+    if let Some(a) = attr("printer-is-shared") {
+        if let Some(Value::Boolean(b)) = a.values.first() {
+            p.shared = *b;
+        }
+    }
+    if let Some(v) = attr("printer-op-policy").and_then(attr_text) {
+        p.op_policy = Some(v);
+    }
+    if let Some(v) = attr("printer-error-policy").and_then(attr_text) {
+        p.error_policy = Some(v);
+    }
+    if !exists {
+        p.state = 3; // idle
+        p.state_time = printer::now();
+        p.config_time = printer::now();
+        p.accepting = true;
+    }
+    reg.add(p);
+    drop(reg);
+    save_printers(ctx);
+    resp.code = status::OK;
+}
+
+/// `delete_printer()` — `CUPS-Delete-Printer` (0x4004).
+fn delete_printer(
+    _req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    if !authorize(ctx, resp, u32::from(op::CUPS_DELETE_PRINTER)) {
+        return;
+    }
+    let Some(name) = printer_name_from_uri(uri_attr) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-uri.");
+        return;
+    };
+    let mut reg = ctx.reg_write();
+    if reg.printers.remove(&name).is_none() {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    }
+    if reg.default.as_deref() == Some(name.as_str()) {
+        reg.default = None;
+    }
+    drop(reg);
+    save_printers(ctx);
+    resp.code = status::OK;
+}
+
+/// `set_default()` — `CUPS-Set-Default` (0x400a).
+fn set_default(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    if !authorize(ctx, resp, u32::from(op::CUPS_SET_DEFAULT)) {
+        return;
+    }
+    let Some(name) = printer_name_from_uri(uri_attr) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-uri.");
+        return;
+    };
+    let mut reg = ctx.reg_write();
+    if !reg.printers.contains_key(&name) {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    }
+    reg.default = Some(name);
+    drop(reg);
+    save_printers(ctx);
+    resp.code = status::OK;
+}
+
+/// `pause`/`resume` — `Pause-Printer` (0x0010) / `Resume-Printer` (0x0011).
+fn set_printer_state(
+    _req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+    state: i32,
+) {
+    let op = if state == 5 {
+        op::PAUSE_PRINTER
+    } else {
+        op::RESUME_PRINTER
+    };
+    if !authorize(ctx, resp, u32::from(op)) {
+        return;
+    }
+    let Some(name) = printer_name_from_uri(uri_attr) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-uri.");
+        return;
+    };
+    let mut reg = ctx.reg_write();
+    let Some(p) = reg.printers.get_mut(&name) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    };
+    p.state = state;
+    p.state_time = printer::now();
+    drop(reg);
+    save_printers(ctx);
+    resp.code = status::OK;
+}
+
+/// `accept`/`reject` — `CUPS-Accept-Jobs`/`CUPS-Reject-Jobs` and the
+/// `Enable/Disable-Printer` aliases.
+fn set_accepting(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+    accepting: bool,
+) {
+    let op = if accepting {
+        op::CUPS_ACCEPT_JOBS
+    } else {
+        op::CUPS_REJECT_JOBS
+    };
+    if !authorize(ctx, resp, u32::from(op)) {
+        return;
+    }
+    let Some(name) = printer_name_from_uri(uri_attr) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-uri.");
+        return;
+    };
+    let mut reg = ctx.reg_write();
+    let Some(p) = reg.printers.get_mut(&name) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    };
+    p.accepting = accepting;
+    if !accepting {
+        if let Some(r) = req
+            .find(tags::OPERATION, "printer-state-message")
+            .and_then(attr_text)
+        {
+            p.state_message = r;
+        }
+        if let Some(reasons) = req.find(tags::OPERATION, "printer-state-reasons") {
+            p.reasons = reasons
+                .values
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Keyword(t) | Value::Text(t) => Some(t.to_string()),
+                    _ => None,
+                })
+                .collect();
+        }
+    } else {
+        p.reasons.clear();
+    }
+    drop(reg);
+    save_printers(ctx);
+    resp.code = status::OK;
+}
+
+/// `set_printer_attributes()` — `Set-Printer-Attributes` (0x0013).
+fn set_printer_attributes(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    if !authorize(ctx, resp, u32::from(op::SET_PRINTER_ATTRIBUTES)) {
+        return;
+    }
+    let Some(name) = printer_name_from_uri(uri_attr) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-uri.");
+        return;
+    };
+    let mut reg = ctx.reg_write();
+    let Some(p) = reg.printers.get_mut(&name) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    };
+    for g in &req.groups {
+        if g.tag != tags::PRINTER && g.tag != tags::OPERATION {
+            continue;
+        }
+        for a in &g.attributes {
+            match a.name.as_str().as_ref() {
+                "device-uri" => {
+                    if let Some(v) = attr_text(a) {
+                        p.device_uri = v;
+                    }
+                }
+                "printer-info" => {
+                    if let Some(v) = attr_text(a) {
+                        p.info = Some(v);
+                    }
+                }
+                "printer-location" => {
+                    if let Some(v) = attr_text(a) {
+                        p.location = Some(v);
+                    }
+                }
+                "printer-geo-location" => {
+                    if let Some(v) = attr_text(a) {
+                        p.geo_location = Some(v);
+                    }
+                }
+                "printer-make-and-model" => {
+                    if let Some(v) = attr_text(a) {
+                        p.make_model = Some(v);
+                    }
+                }
+                "printer-is-accepting-jobs" => {
+                    if let Some(Value::Boolean(b)) = a.values.first() {
+                        p.accepting = *b;
+                    }
+                }
+                "printer-is-shared" => {
+                    if let Some(Value::Boolean(b)) = a.values.first() {
+                        p.shared = *b;
+                    }
+                }
+                "printer-state" => {
+                    if let Some(v) = attr_int(a) {
+                        p.state = v as i32;
+                        p.state_time = printer::now();
+                    }
+                }
+                "printer-op-policy" => {
+                    if let Some(v) = attr_text(a) {
+                        p.op_policy = Some(v);
+                    }
+                }
+                "printer-error-policy" => {
+                    if let Some(v) = attr_text(a) {
+                        p.error_policy = Some(v);
+                    }
+                }
+                "printer-is-temporary" => {
+                    if let Some(Value::Boolean(b)) = a.values.first() {
+                        p.temporary = *b;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    drop(reg);
+    save_printers(ctx);
+    resp.code = status::OK;
 }

@@ -136,7 +136,7 @@ pub fn copy_printer_attrs(
     queued_job_count: i32,
 ) {
     let curtime = now();
-    let is_default = ctx.registry.default.as_deref() == Some(p.name.as_str());
+    let is_default = ctx.reg().default.as_deref() == Some(p.name.as_str());
     let pr = tags::PRINTER;
 
     let add = |resp: &mut IppMessage, name: &str, tag: u8, v: Value| {
@@ -161,7 +161,7 @@ pub fn copy_printer_attrs(
             .iter()
             .map(|m| {
                 let member_is_class = ctx
-                    .registry
+                    .reg()
                     .printers
                     .get(m.as_str())
                     .is_some_and(Printer::is_class);

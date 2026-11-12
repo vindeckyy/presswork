@@ -21,3 +21,4 @@ printer = { path = "../../crates/printer" }
 tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "signal", "fs", "io-util", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+authn = { path = "../../crates/authn" }

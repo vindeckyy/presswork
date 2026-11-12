@@ -15,3 +15,4 @@ printer = { path = "../printer" }
 tracing = "0.1"
 job = { path = "../job" }
 mime-db = { path = "../mime-db" }
+authz = { path = "../authz" }

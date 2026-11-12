@@ -181,6 +181,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         .clone()
         .unwrap_or_else(|| "/usr/share/cups".into());
     let mime = Arc::new(mime_db::MimeDb::load(std::path::Path::new(&mime_dir)).unwrap_or_default());
+    let server_root = Arc::new(paths.server_root.clone());
 
     // Log sinks — error_log always (foreground → stderr), access_log
     // when configured.
@@ -226,6 +227,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         log.clone(),
                         jobs.clone(),
                         mime.clone(),
+                        server_root.clone(),
                     ));
                 }
                 Err(e) => log.err(
@@ -249,6 +251,7 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
                         log.clone(),
                         jobs.clone(),
                         mime.clone(),
+                        server_root.clone(),
                     ));
                 }
                 Err(e) => log.err(
@@ -307,6 +310,7 @@ async fn accept_tcp(
     log: Arc<Logs>,
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
+    server_root: Arc<PathBuf>,
 ) {
     let _ = ssl; // TLS acceptor lands with cups-tls (P5)
     loop {
@@ -322,9 +326,23 @@ async fn accept_tcp(
                 let log = log.clone();
                 let jobs = jobs.clone();
                 let mime = mime.clone();
+                let server_root = server_root.clone();
+                let client_addr = peer.ip();
                 tokio::spawn(async move {
                     serve_one(
-                        stream, opts, doc_root, registry, cfg, port, local, log, host, jobs, mime,
+                        stream,
+                        opts,
+                        doc_root,
+                        registry,
+                        cfg,
+                        port,
+                        local,
+                        log,
+                        host,
+                        jobs,
+                        mime,
+                        server_root,
+                        client_addr,
                     )
                     .await;
                 });
@@ -346,6 +364,7 @@ async fn accept_unix(
     log: Arc<Logs>,
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
+    server_root: Arc<PathBuf>,
 ) {
     loop {
         match listener.accept().await {
@@ -357,6 +376,7 @@ async fn accept_unix(
                 let log = log.clone();
                 let jobs = jobs.clone();
                 let mime = mime.clone();
+                let server_root = server_root.clone();
                 tokio::spawn(async move {
                     serve_one(
                         stream,
@@ -370,6 +390,8 @@ async fn accept_unix(
                         "localhost".to_string(),
                         jobs,
                         mime,
+                        server_root,
+                        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                     )
                     .await;
                 });
@@ -394,13 +416,26 @@ async fn serve_one<S>(
     host: String,
     jobs: Arc<std::sync::RwLock<job::Jobs>>,
     mime: Arc<mime_db::MimeDb>,
+    server_root: Arc<PathBuf>,
+    client_addr: std::net::IpAddr,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send,
 {
     let (mut rd, mut wr) = split(stream);
     let _ = httpd::serve_connection(&mut rd, &mut wr, &opts, move |req| {
         dispatch_req(
-            &req, &doc_root, &registry, &cfg, port, local, &log, &host, &jobs, &mime,
+            &req,
+            &doc_root,
+            &registry,
+            &cfg,
+            port,
+            local,
+            &log,
+            &host,
+            &jobs,
+            &mime,
+            &server_root,
+            client_addr,
         )
     })
     .await;
@@ -435,6 +470,8 @@ fn dispatch_req(
     host: &str,
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     mime: &Arc<mime_db::MimeDb>,
+    server_root: &std::path::Path,
+    client_addr: std::net::IpAddr,
 ) -> Response {
     match req.method {
         Method::Get | Method::Head => static_get(&req.uri, doc_root),
@@ -447,7 +484,19 @@ fn dispatch_req(
                     .eq_ignore_ascii_case("application/ipp")
             }) =>
         {
-            ipp_dispatch(req, registry, cfg, port, local, log, host, jobs, mime)
+            ipp_dispatch(
+                req,
+                registry,
+                cfg,
+                port,
+                local,
+                log,
+                host,
+                jobs,
+                mime,
+                server_root,
+                client_addr,
+            )
         }
         Method::Options if req.wants_tls_upgrade => Response::status(StatusCode::UPGRADE_REQUIRED),
         Method::Options => {
@@ -533,18 +582,29 @@ fn ipp_dispatch(
     host: &str,
     jobs: &Arc<std::sync::RwLock<job::Jobs>>,
     mime: &Arc<mime_db::MimeDb>,
+    server_root: &std::path::Path,
+    client_addr: std::net::IpAddr,
 ) -> Response {
     let Ok((msg, consumed)) = ipp_codec::decode(req.body.as_bytes()) else {
         log_access(&**log, host, req, 400, 0, "-", "-");
         return Response::status(StatusCode::BAD_REQUEST);
     };
     let document = &req.body.as_bytes()[consumed..];
-    let reg = registry.read().unwrap_or_else(|e| e.into_inner());
-    let mut ctx = ops::Ctx::new(&reg, cfg, port, jobs.as_ref(), mime.as_ref());
+    let mut ctx = ops::Ctx::new(registry, cfg, port, jobs.as_ref(), mime.as_ref());
     ctx.is_local = local;
     ctx.document = document;
+    ctx.server_root = server_root.to_path_buf();
+    ctx.client_addr = client_addr;
+    // Basic auth: Authorization header -> authenticated user + groups.
+    if let Some(h) = req.headers.get("authorization") {
+        if let Some(creds) = authn::parse(&h) {
+            if let Some((user, groups)) = authn::authenticate(&creds) {
+                ctx.user_groups = groups;
+                ctx.username = Some(user);
+            }
+        }
+    }
     let resp = ops::dispatch(&msg, &ctx);
-    drop(reg);
     // Scheduler tick: pick next pending job on an idle printer and spawn
     // its filter->backend pipeline (mirrors start_job being driven by the
     // scheduler's event loop).
