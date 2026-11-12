@@ -357,6 +357,14 @@ impl Jobs {
     pub fn active(&self) -> impl Iterator<Item = &Job> {
         self.by_id.values().filter(|j| !j.state.is_final())
     }
+    /// All jobs, mutable (bulk ops like Cancel-My-Jobs / Purge-Jobs).
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Job> {
+        self.by_id.values_mut()
+    }
+    /// Every job id currently tracked.
+    pub fn ids(&self) -> Vec<i32> {
+        self.by_id.keys().copied().collect()
+    }
 }
 
 // ---------- attribute helpers ----------

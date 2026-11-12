@@ -1,7 +1,7 @@
 //! `cupsdProcessIPPRequest()` — validation preamble + op switch.
 
 use ipp_codec::{ops::op, ops::status, tags, Attribute, IppMessage, Value};
-use job::{Job, Jobs};
+use job::{Job, JobState, Jobs};
 use printer::{ptype, Printer, Registry};
 use std::sync::RwLock;
 
@@ -362,6 +362,8 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
             || x == op::GET_SUBSCRIPTION_ATTRIBUTES
             || x == op::RENEW_SUBSCRIPTION
             || x == op::CANCEL_SUBSCRIPTION
+            || x == op::CANCEL_MY_JOBS
+            || x == op::PURGE_JOBS
     );
     let uri_attr = if needs_uri {
         match req
@@ -405,6 +407,13 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::CREATE_JOB) => create_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::SEND_DOCUMENT) => send_document(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CANCEL_JOB) => cancel_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::HOLD_JOB) => hold_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::RELEASE_JOB) => release_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::RESTART_JOB) => restart_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CLOSE_JOB) => close_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CANCEL_MY_JOBS) => cancel_my_jobs(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::PURGE_JOBS) => purge_jobs(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CUPS_MOVE_JOB) => cups_move_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_JOB_ATTRIBUTES) => get_job_attributes(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CUPS_ADD_MODIFY_PRINTER) => {
             add_modify_printer(req, resp, ctx, uri_attr)
@@ -906,6 +915,119 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
     }
     resp.code = status::OK;
     add_job_group(resp, jobs.get(id).unwrap(), ctx);
+}
+
+/// Shared body for single-job state transitions (Hold/Release/Restart).
+fn transition_job(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+    to: JobState,
+    done_msg: &'static str,
+) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    if let Some(j) = jobs.get_mut(id) {
+        j.state = to;
+        if to == JobState::Pending {
+            j.completed_at = None;
+        }
+        let _ = j.save(&ctx.request_root);
+        resp.code = status::OK;
+        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    } else {
+        send_status(resp, status::ERROR_NOT_FOUND, done_msg);
+    }
+}
+
+fn hold_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    transition_job(req, resp, ctx, uri_attr, JobState::PendingHeld, "Job not found.");
+}
+
+fn release_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    transition_job(req, resp, ctx, uri_attr, JobState::Pending, "Job not found.");
+}
+
+fn restart_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    transition_job(req, resp, ctx, uri_attr, JobState::Pending, "Job not found.");
+}
+
+/// `Close-Job` — a Create-Job with no more documents becomes printable.
+fn close_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    transition_job(req, resp, ctx, uri_attr, JobState::Pending, "Job not found.");
+}
+
+/// `Cancel-My-Jobs` — cancel every job owned by the requesting user.
+fn cancel_my_jobs(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    _uri_attr: Option<&Attribute>,
+) {
+    let user = ctx
+        .requesting_user
+        .clone()
+        .or_else(|| {
+            req.find(tags::OPERATION, "requesting-user-name")
+                .and_then(attr_text)
+        })
+        .unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    for j in jobs.values_mut() {
+        if j.username == user && !j.state.is_final() {
+            j.state = JobState::Canceled;
+            j.completed_at = Some(now);
+            let _ = j.save(&ctx.request_root);
+        }
+    }
+    resp.code = status::OK;
+}
+
+/// `Purge-Jobs` — remove all jobs (admin op; upstream requires auth).
+fn purge_jobs(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, _uri_attr: Option<&Attribute>) {
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    for j in jobs.values_mut() {
+        j.state = JobState::Canceled;
+        let _ = j.save(&ctx.request_root);
+    }
+    resp.code = status::OK;
+}
+
+/// `CUPS-Move-Job` — move a job to a different queue (`job-printer-uri`).
+fn cups_move_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let new_dest = req
+        .find(tags::OPERATION, "job-printer-uri")
+        .and_then(attr_text)
+        .map(|u| u.rsplit('/').next().unwrap_or(&u).to_string());
+    let Some(dest) = new_dest else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing job-printer-uri.");
+        return;
+    };
+    if ctx.reg().find(&dest).is_none() {
+        send_status(resp, status::ERROR_NOT_FOUND, "Destination not found.");
+        return;
+    }
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    if let Some(j) = jobs.get_mut(id) {
+        j.dest = dest;
+        let _ = j.save(&ctx.request_root);
+        resp.code = status::OK;
+        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    } else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+    }
 }
 
 /// `get_job_attributes()` — one job's full attribute set.
