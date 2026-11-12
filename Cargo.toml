@@ -32,6 +32,7 @@ members = [
     "bins/cupsfilter",
     "bins/cups-exec",
     "bins/backends/socket",
+    "bins/backends/file",
     "bins/backends/ipp",
     "bins/backends/lpd",
     "bins/backends/snmp",

@@ -13,3 +13,4 @@ name = "socket"
 path = "src/main.rs"
 
 [dependencies]
+backend-common = { path = "../../../crates/backend-common" }

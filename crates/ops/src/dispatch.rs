@@ -328,15 +328,12 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::SEND_DOCUMENT) => send_document(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CANCEL_JOB) => cancel_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_JOB_ATTRIBUTES) => get_job_attributes(req, resp, ctx, uri_attr),
-        x if x == u32::from(op::CUPS_GET_DEVICES) || x == u32::from(op::CUPS_GET_PPDS) => {
-            // P3/P7 dependencies (cups-deviced, PPD index).
+        x if x == u32::from(op::CUPS_GET_DEVICES) => get_devices(req, resp, ctx),
+        x if x == u32::from(op::CUPS_GET_PPDS) => {
             send_status(
                 resp,
                 status::ERROR_OPERATION_NOT_SUPPORTED,
-                format!(
-                    "{} not supported.",
-                    ipp_codec::ops::op::name(u16::try_from(x).unwrap_or(0))
-                ),
+                "CUPS-Get-PPDs not supported.",
             );
         }
         x => {
@@ -933,4 +930,83 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx) {
     if let Some(t) = job.completed_at {
         add("time-at-completed", tags::INTEGER, Value::Integer(t as i32));
     }
+}
+
+/// `get_devices()` — run `cups-deviced` and emit each discovered device as
+/// `device-class/device-uri/device-make-and-model/device-info/device-id`
+/// (`CUPS-Get-Devices`, P3).
+fn get_devices(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    let deviced = ctx.server_bin.join("cups-deviced");
+    let backend_dir = ctx.server_bin.join("backend");
+    let out = std::process::Command::new(&deviced)
+        .args(["0", "0", "15", &backend_dir.to_string_lossy()])
+        .output();
+    let Ok(out) = out else {
+        send_status(resp, status::ERROR_INTERNAL, "cannot run cups-deviced");
+        return;
+    };
+    resp.code = status::OK;
+    let g = resp.group_mut(tags::OPERATION);
+    let _ = g;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        // `class uri "make-model" "info" ["device-id"]`
+        let mut it = line.splitn(3, ' ');
+        let (Some(class_), Some(uri), rest) = (it.next(), it.next(), it.next()) else {
+            continue;
+        };
+        let q = quoted_fields(rest.unwrap_or(""));
+        let (mm, info, devid) = (
+            q.first().cloned().unwrap_or_default(),
+            q.get(1).cloned().unwrap_or_default(),
+            q.get(2).cloned().unwrap_or_default(),
+        );
+        let g = resp.group_mut(tags::OPERATION);
+        g.attributes.push(Attribute::new(
+            "device-class",
+            tags::KEYWORD,
+            vec![Value::Keyword(class_.into())],
+        ));
+        g.attributes.push(Attribute::new(
+            "device-uri",
+            tags::URI,
+            vec![Value::Uri(uri.into())],
+        ));
+        g.attributes.push(Attribute::new(
+            "device-make-and-model",
+            tags::TEXT,
+            vec![Value::Text(mm.into())],
+        ));
+        g.attributes.push(Attribute::new(
+            "device-info",
+            tags::TEXT,
+            vec![Value::Text(info.into())],
+        ));
+        if !devid.is_empty() {
+            g.attributes.push(Attribute::new(
+                "device-id",
+                tags::TEXT,
+                vec![Value::Text(devid.into())],
+            ));
+        }
+    }
+}
+
+/// Split `"a" "b" "c"` quoted fields (handles embedded spaces).
+fn quoted_fields(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut inq = false;
+    for c in s.chars() {
+        match c {
+            '"' => {
+                if inq {
+                    out.push(std::mem::take(&mut cur));
+                }
+                inq = !inq;
+            }
+            c if inq => cur.push(c),
+            _ => {}
+        }
+    }
+    out
 }
