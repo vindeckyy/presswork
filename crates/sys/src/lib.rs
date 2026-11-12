@@ -150,3 +150,58 @@ mod tests {
         assert_eq!(uid_of("definitely-not-a-user-xyz"), None);
     }
 }
+
+/// systemd socket activation (`sd_listen_fds(3)`): when `LISTEN_PID`
+/// equals our pid and `LISTEN_FDS` is set, systemd has passed pre-bound
+/// listener sockets on fds 3..=3+N-1. Return them as owned fds so the
+/// daemon can adopt them instead of binding its own. Empty when the
+/// daemon was started directly (no activation).
+///
+/// # Safety
+/// This takes ownership of the inherited descriptors exactly once —
+/// callers must not use the raw fd numbers again after this call.
+#[cfg(unix)]
+#[must_use]
+pub fn sd_listen_fds() -> Vec<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    let pid_ok = std::env::var("LISTEN_PID")
+        .ok()
+        .and_then(|p| p.parse::<u32>().ok())
+        .is_some_and(|p| p == std::process::id());
+    if !pid_ok {
+        return Vec::new();
+    }
+    let n: i32 = std::env::var("LISTEN_FDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .max(0);
+    let mut out = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let fd = 3 + i;
+        // SAFETY: systemd guarantees fds 3..3+n are open, valid listening
+        // sockets belonging to this process. Taking ownership once is the
+        // documented activation contract; we never touch the numbers after.
+        let owned = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) };
+        out.push(owned);
+    }
+    out
+}
+
+/// `getsockname(2)` `sa_family` for an fd — `AF_UNIX` vs `AF_INET`/`INET6`.
+/// Returns the family constant, or `-1` on error.
+#[cfg(unix)]
+#[must_use]
+pub fn socket_family(fd: std::os::fd::RawFd) -> i32 {
+    let mut ss: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    // SAFETY: `ss`/`len` are valid out-params; `fd` is an open socket.
+    let rc = unsafe {
+        libc::getsockname(fd, &mut ss as *mut _ as *mut libc::sockaddr, &mut len)
+    };
+    if rc == 0 {
+        i32::from(ss.ss_family)
+    } else {
+        -1
+    }
+}

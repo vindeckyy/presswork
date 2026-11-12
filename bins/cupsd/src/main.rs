@@ -293,10 +293,55 @@ async fn run(cfg: Config, _args: Args, paths: Paths) -> std::process::ExitCode {
         }
     }
 
-    // Bind all listeners.
+    // systemd socket activation — `cups.socket` hands us pre-bound
+    // listeners on fds 3+N (`sd_listen_fds`). When present they take
+    // precedence over `Listen` directives.
+    let activated = sys::sd_listen_fds();
     let mut join = tokio::task::JoinSet::new();
     let mut bound = 0usize;
-    for ln in &cfg.cupsd.listeners {
+    for fd in activated {
+        use std::os::fd::{AsRawFd, IntoRawFd};
+        match sys::socket_family(fd.as_raw_fd()) {
+            f if f == libc::AF_UNIX => {
+                let std_l = std::os::unix::net::UnixListener::from(fd);
+                std_l.set_nonblocking(true).ok();
+                match UnixListener::from_std(std_l) {
+                    Ok(l) => {
+                        bound += 1;
+                        log.err(cups_log::Level::Info, "Listening on activated unix socket.");
+                        join.spawn(accept_unix(
+                            l, tls.clone(), opts.clone(), doc_root.clone(), registry.clone(),
+                            cfg.clone(), log.clone(), jobs.clone(), mime.clone(), subs.clone(),
+                            dnssd_state.clone(), server_root.clone(),
+                        ));
+                    }
+                    Err(e) => log.err(cups_log::Level::Error, format!("activated unix socket: {e}")),
+                }
+            }
+            f if f == libc::AF_INET || f == libc::AF_INET6 => {
+                let std_l = std::net::TcpListener::from(fd);
+                std_l.set_nonblocking(true).ok();
+                match TcpListener::from_std(std_l) {
+                    Ok(l) => {
+                        bound += 1;
+                        log.err(cups_log::Level::Info, "Listening on activated TCP socket.");
+                        join.spawn(accept_tcp(
+                            l, false, tls.clone(), opts.clone(), doc_root.clone(),
+                            registry.clone(), cfg.clone(), log.clone(), jobs.clone(),
+                            mime.clone(), subs.clone(), dnssd_state.clone(), server_root.clone(),
+                        ));
+                    }
+                    Err(e) => log.err(cups_log::Level::Error, format!("activated socket: {e}")),
+                }
+            }
+            _ => {
+                let _ = fd.into_raw_fd(); // unknown family — leak rather than close wrongly
+            }
+        }
+    }
+
+    // Bind configured listeners (skipped under socket activation).
+    for ln in if bound == 0 { &cfg.cupsd.listeners[..] } else { &[][..] } {
         match &ln.addr {
             ListenAddr::Tcp(addr) => match TcpListener::bind(addr).await {
                 Ok(l) => {
