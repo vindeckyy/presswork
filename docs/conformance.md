@@ -26,6 +26,8 @@ source tree). Each `.test` file is run with
 | `print-uri` | `document-uri` (`file://`) fetch |
 | `validate-job` | |
 | `create-printer-subscription` | pull (ippget) variant; push variant skips (no `-d recipient`) |
+| `get-ppd`, `get-ppd-printer` | `cups-driverd cat` streams the PPD body; `printer-uri` resolves the driverless `everywhere` PPD |
+| `get-ppds`, `get-ppds-make`, `get-ppds-product`, `get-ppds-drv-only` | `cups-driverd list` → per-driver `ppd-*` groups; honors `include-schemes=drv`, `ppd-make`, `ppd-product`, `limit` |
 
 ## RFC / PWG suites — 17/18 each
 
@@ -53,11 +55,15 @@ can administer queues, matching real CUPS.
 | `get-notifications` | passes with `-d id=<subscription-id>` (pull delivery verified) |
 | `get-printers-printer-id` | passes with `-d printer_id=<id>` |
 
-## Deferred to P7 (PPD / legacy-driver parity)
+## P7 in progress — PPD / legacy-driver parity
 
-`get-ppd*` (8 tests), `get-ppd-printer`, `cups-create-local-printer`
-driver selection. Driverless IPP is the active target; PPD/legacy-driver
-support is the next phase.
+`CUPS-Get-PPDs`/`CUPS-Get-PPD` are implemented via a `cups-driverd`
+helper under `ServerBin/daemon/` (the `cups-deviced` analogue). The
+driver database ships the IPP Everywhere model plus `.ppd` files scanned
+from the configured PPD dir; `get-ppd*`/`get-ppds*` tests pass 6/6.
+Remaining: `.drv` driver-database files, `CUPS-Create-Local-Printer`
+driver selection (`ppd-name`/`device-id`→driver mapping), and full
+legacy PPD-based job processing.
 
 ## Known engineering notes
 
