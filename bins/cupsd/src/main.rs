@@ -18,6 +18,7 @@ use tokio::net::{TcpListener, UnixListener};
 
 use cups_config::{Config, Diagnostic, ListenAddr, Paths, Severity};
 use httpd::{Method, Request, Response, StatusCode};
+mod cgi;
 use printer::Registry;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -709,8 +710,20 @@ fn dispatch_req(
     client_addr: std::net::IpAddr,
     encrypted: bool,
 ) -> Response {
+    let server_bin = std::path::Path::new(
+        cfg.files.server_bin.as_deref().unwrap_or("/usr/lib/cups"),
+    );
     match req.method {
-        Method::Get | Method::Head => static_get(&req.uri, doc_root),
+        Method::Get | Method::Head => cgi::dispatch(
+            &req.uri,
+            server_bin,
+            req,
+            client_addr,
+            host,
+            port,
+            encrypted,
+        )
+        .unwrap_or_else(|| static_get(&req.uri, doc_root)),
         Method::Post
             if req.content_type().is_some_and(|c| {
                 c.split(';')
@@ -742,6 +755,16 @@ fn dispatch_req(
             log_access(&**log, host, req, 200, 0, "-", "-");
             Response::status(StatusCode::OK)
         }
+        Method::Post => cgi::dispatch(
+            &req.uri,
+            server_bin,
+            req,
+            client_addr,
+            host,
+            port,
+            encrypted,
+        )
+        .unwrap_or_else(|| Response::status(StatusCode::NOT_IMPLEMENTED)),
         _ => {
             log_access(&**log, host, req, 501, 0, "-", "-");
             Response::status(StatusCode::NOT_IMPLEMENTED)
