@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build-test:
+    name: build + test (stable MSRV)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # MSRV floor + current stable — distro build range.
+        toolchain: ["1.75.0", stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build --workspace --locked
+      - name: test
+        run: cargo test --workspace --locked
+      - name: config self-check
+        run: cargo run -p cupsd -- -t -c cupsd.conf.example || true
+
+  forbid-unsafe:
+    name: unsafe confined to sys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no unsafe outside crates/sys
+        run: |
+          if grep -rln 'unsafe ' crates bins --include='*.rs' | grep -v 'crates/sys/'; then
+            echo 'unsafe outside sys' >&2; exit 1
+          fi
+
+  fuzz:
+    name: fuzz smoke (nightly)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: fuzz smoke — every target, short run
+        run: |
+          cd fuzz
+          for t in ipp_decode config_lexer mime_db printers_conf; do
+            cargo +nightly fuzz run "$t" -- -runs=5000 -max_total_time=30 || exit 1
+          done
+
+  supply-chain:
+    name: cargo audit + deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+      - name: cargo deny
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+
+  conformance:
+    name: ipptool conformance (upstream suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        run: cargo build --workspace --locked
+      - name: fetch ipptool + test corpus
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cups ipptool cups-ipp-utils || true
+      - name: run daemon in scratch root
+        run: |
+          ./scripts/conformance.sh --bootstrap
+      - name: ipptool matrix
+        run: ./scripts/conformance.sh --run

@@ -1052,6 +1052,15 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     };
+    // `last-document` is a required Send-Document attribute (RFC 8011).
+    let Some(last_attr) = req.find(tags::OPERATION, "last-document") else {
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing \"last-document\" attribute.",
+        );
+        return;
+    };
     let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
     let Some(job) = jobs.get_mut(id) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
@@ -1076,9 +1085,9 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         format,
     });
     // `last-document` flag finalizes the job.
-    let last = req
-        .find(tags::OPERATION, "last-document")
-        .and_then(|a| a.values.first())
+    let last = last_attr
+        .values
+        .first()
         .is_some_and(|v| matches!(v, Value::Boolean(true)));
     if last {
         job.state = job::JobState::Pending;
@@ -1098,6 +1107,11 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
     let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
     if jobs.get(id).is_none() {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    }
+    // A job already in a terminating state can't be canceled.
+    if jobs.get(id).map(|j| j.state.is_final()).unwrap_or(false) {
+        send_status(resp, status::ERROR_NOT_POSSIBLE, "Job already completed.");
         return;
     }
     if let Some(j) = jobs.get_mut(id) {
@@ -1663,6 +1677,7 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx, ra: &Option<Vec<St
         tags::NAME,
         Value::Name(job.title.clone().into()),
     );
+    add("job-state-message", tags::TEXT, Value::Text("".into()));
     add("job-priority", tags::INTEGER, Value::Integer(job.priority));
     add("copies", tags::INTEGER, Value::Integer(job.copies));
     add(
@@ -1670,6 +1685,32 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx, ra: &Option<Vec<St
         tags::MIMETYPE,
         Value::Text(job.format.clone().into()),
     );
+    add(
+        "number-of-documents",
+        tags::INTEGER,
+        Value::Integer(job.files.len() as i32),
+    );
+    let k_octets: u64 = job.files.iter().map(|f| f.size).sum();
+    add(
+        "job-k-octets",
+        tags::INTEGER,
+        Value::Integer((k_octets / 1024) as i32),
+    );
+    add(
+        "job-more-info",
+        tags::URI,
+        Value::Uri(
+            format!("http://{}:{}/jobs/{}", ctx.hostname, ctx.port, job.id).into(),
+        ),
+    );
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i32)
+        .unwrap_or(0);
+    add("job-printer-up-time", tags::INTEGER, Value::Integer(now_s));
+    if job.state as i32 > JobState::Processing as i32 {
+        add("job-preserved", tags::BOOLEAN, Value::Boolean(!job.files.is_empty()));
+    }
     add(
         "time-at-creation",
         tags::INTEGER,
@@ -1685,6 +1726,11 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx, ra: &Option<Vec<St
     if let Some(t) = job.completed_at {
         add("time-at-completed", tags::INTEGER, Value::Integer(t as i32));
     }
+    add(
+        "job-uuid",
+        tags::URI,
+        Value::Uri(format!("urn:uuid:job-{}", job.id).into()),
+    );
 }
 
 /// `get_devices()` — run `cups-deviced` and emit each discovered device as
