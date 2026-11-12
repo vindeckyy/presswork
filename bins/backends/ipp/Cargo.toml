@@ -12,4 +12,8 @@ workspace = true
 name = "ipp"
 path = "src/main.rs"
 
-[dependencies]
+[dependencies.backend-common]
+path = "../../../crates/backend-common"
+
+[dependencies.ipp-codec]
+path = "../../../crates/ipp-codec"

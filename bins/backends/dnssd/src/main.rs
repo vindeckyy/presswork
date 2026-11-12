@@ -46,10 +46,39 @@ fn main() {
     );
 }
 
-/// Exec the sibling `ipp` backend with `dnssd://` rewritten to `ipp://`.
-fn forward(_argv0: &[String], _real_uri: &str) -> i32 {
+/// Exec the sibling `ipp` backend with `dnssd://` rewritten to `ipp://`,
+/// preserving argv + the environment (upstream `dnssd.c` `execv`s
+/// `{ServerBin}/backend/ipp` after rewriting `DEVICE_URI`). `exec`
+/// replaces this process so the `ipp` backend's exit status propagates.
+#[cfg(unix)]
+fn forward(argv: &[String], real_uri: &str) -> i32 {
+    use std::os::unix::process::CommandExt;
+    // Locate the sibling `ipp` backend: next to this executable, else
+    // `$CUPS_SERVERBIN/backend/ipp`, else the stock libdir.
+    let ipp = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("ipp")))
+        .filter(|p| p.is_file())
+        .or_else(|| {
+            std::env::var("CUPS_SERVERBIN")
+                .ok()
+                .map(|d| std::path::PathBuf::from(d).join("backend").join("ipp"))
+        })
+        .filter(|p| p.is_file())
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/lib/cups/backend/ipp"));
+    let err = std::process::Command::new(&ipp)
+        .args(argv.iter().skip(1))
+        .env("DEVICE_URI", real_uri)
+        .exec(); // only returns on failure
     backend_common::error(format_args!(
-        "dnssd: ipp forwarding not yet wired (resolve ok)"
+        "dnssd: cannot exec {}: {err}",
+        ipp.display()
     ));
+    backend_common::code::FAILED
+}
+
+#[cfg(not(unix))]
+fn forward(_argv: &[String], _real_uri: &str) -> i32 {
+    backend_common::error(format_args!("dnssd: ipp forwarding unsupported on this platform"));
     backend_common::code::FAILED
 }
