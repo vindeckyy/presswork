@@ -88,8 +88,11 @@ impl JobSpec {
     }
 
     fn argv(&self, with_file: bool) -> Vec<String> {
+        // Backend argv is `[argv0, job-id, user, title, copies, options,
+        // filename]` — `argv[0]` is the program name (set by `Command`),
+        // so the job-id is the first element here. `backend_common`
+        // expects the document path at `argv[6]`.
         let mut a = vec![
-            self.printer.clone(),
             self.job_id.to_string(),
             self.username.clone(),
             self.title.clone(),
