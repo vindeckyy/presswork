@@ -17,16 +17,14 @@ mod vars;
 
 pub use acl::{parse_aaa, Diag, Location, Severity};
 pub use config::{
-    default_listeners, default_policy, read_cups_files_conf, read_cupsd_conf,
-    CupsFilesConfig, CupsdConfig, DiagSink, Diagnostic, Diagnostics, Policy,
-    PolicyOp,
+    default_listeners, default_policy, read_cups_files_conf, read_cupsd_conf, CupsFilesConfig,
+    CupsdConfig, DiagSink, Diagnostic, Diagnostics, Policy, PolicyOp,
 };
 pub use lexer::{conf_lines, ConfLine, ConfLines};
 pub use types::{
-    limit, AccessLogLevel, AuthLevel, AuthType, BrowseProtocols, Encryption,
-    ErrorPolicy, FatalErrors, HostMask, IpNet, ListenAddr, Listener,
-    LogLevel, LogTimeFormat, OrderType, PeerCred, PrintcapFormat, Satisfy,
-    Sandboxing, TlsOptions, TlsVersion,
+    limit, AccessLogLevel, AuthLevel, AuthType, BrowseProtocols, Encryption, ErrorPolicy,
+    FatalErrors, HostMask, IpNet, ListenAddr, Listener, LogLevel, LogTimeFormat, OrderType,
+    PeerCred, PrintcapFormat, Sandboxing, Satisfy, TlsOptions, TlsVersion,
 };
 
 use std::path::{Path, PathBuf};
@@ -68,10 +66,7 @@ impl Paths {
 }
 
 /// Parse `cupsd.conf` from a reader (convenience wrapper).
-pub fn parse_cupsd_conf<R: std::io::BufRead>(
-    r: R,
-    filename: &str,
-) -> (CupsdConfig, Diagnostics) {
+pub fn parse_cupsd_conf<R: std::io::BufRead>(r: R, filename: &str) -> (CupsdConfig, Diagnostics) {
     let mut cfg = CupsdConfig::defaults();
     let mut diags = Diagnostics {
         fatal: cfg.fatal_errors,
@@ -122,6 +117,7 @@ pub struct LoadOutcome {
 /// Mirrors `cupsdReadConfiguration`'s order and failure behavior:
 /// missing cups-files.conf → INFO + defaults; missing cupsd.conf →
 /// fatal. Applies the default-policy synthesis and listener defaults.
+#[must_use]
 pub fn load(paths: &Paths) -> LoadOutcome {
     let mut files = CupsFilesConfig::defaults();
     let mut cupsd = CupsdConfig::defaults();
@@ -155,10 +151,7 @@ pub fn load(paths: &Paths) -> LoadOutcome {
                 severity: Severity::Info,
                 file: paths.cups_files_conf.to_string_lossy().to_string(),
                 line: 0,
-                message: format!(
-                    "No {}, using defaults.",
-                    paths.cups_files_conf.display()
-                ),
+                message: format!("No {}, using defaults.", paths.cups_files_conf.display()),
             });
         }
         Err(e) => {
@@ -197,10 +190,7 @@ pub fn load(paths: &Paths) -> LoadOutcome {
                 severity: Severity::Error,
                 file: paths.cupsd_conf.to_string_lossy().to_string(),
                 line: 0,
-                message: format!(
-                    "Unable to open \"{}\" - {e}",
-                    paths.cupsd_conf.display()
-                ),
+                message: format!("Unable to open \"{}\" - {e}", paths.cupsd_conf.display()),
             });
             return LoadOutcome {
                 config: Config { cupsd, files },
@@ -214,8 +204,7 @@ pub fn load(paths: &Paths) -> LoadOutcome {
     let dp_ok = cupsd
         .default_policy
         .as_deref()
-        .map(|name| cupsd.policies.iter().any(|p| p.name == name))
-        .unwrap_or(false);
+        .is_some_and(|name| cupsd.policies.iter().any(|p| p.name == name));
     if !dp_ok {
         if let Some(name) = &cupsd.default_policy {
             diags.entries.push(Diagnostic {

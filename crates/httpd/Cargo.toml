@@ -9,3 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+tokio = { version = "1", features = ["net", "io-util", "rt", "time", "fs"] }
+thiserror = "2"
+tracing = "0.1"

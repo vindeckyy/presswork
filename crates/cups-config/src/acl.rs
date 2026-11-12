@@ -3,9 +3,7 @@
 //! from `scheduler/conf.c`.
 
 use crate::lexer::ConfLine;
-use crate::types::{
-    limit, AuthLevel, AuthType, Encryption, HostMask, IpNet, OrderType, Satisfy,
-};
+use crate::types::{limit, AuthLevel, AuthType, Encryption, HostMask, IpNet, OrderType, Satisfy};
 
 /// One `<Location>` (or one `<Limit>` variant of it, or one `<Policy>`
 /// operation limit — same structure upstream).
@@ -95,16 +93,15 @@ pub fn parse_aaa<D: Diag>(
     filename: &str,
 ) -> AaaResult {
     let name = line.name.as_str();
-    let value = match &line.value {
-        Some(v) => v.as_str(),
-        None => {
-            diags.log(
-                Severity::Error,
-                line.linenum,
-                format!("Missing value on line {} of {}.", line.linenum, filename),
-            );
-            return AaaResult::Error;
-        }
+    let value = if let Some(v) = &line.value {
+        v.as_str()
+    } else {
+        diags.log(
+            Severity::Error,
+            line.linenum,
+            format!("Missing value on line {} of {}.", line.linenum, filename),
+        );
+        return AaaResult::Error;
     };
     let l = line.linenum;
 
@@ -177,26 +174,29 @@ pub fn parse_aaa<D: Diag>(
             } else {
                 None
             };
-            match t {
-                Some(t) => {
-                    loc.auth_type = t;
-                    if loc.auth_level == AuthLevel::Anon {
-                        loc.auth_level = AuthLevel::User;
-                    }
+            if let Some(t) = t {
+                loc.auth_type = t;
+                if loc.auth_level == AuthLevel::Anon {
+                    loc.auth_level = AuthLevel::User;
                 }
-                None => {
-                    diags.log(Severity::Warn, l, format!(
-                        "Unknown authorization type {value} on line {l} of {filename}."));
-                    return AaaResult::Error;
-                }
+            } else {
+                diags.log(
+                    Severity::Warn,
+                    l,
+                    format!("Unknown authorization type {value} on line {l} of {filename}."),
+                );
+                return AaaResult::Error;
             }
         }
     } else if eq(name, "AuthClass") {
         if eq(value, "anonymous") {
             loc.auth_type = AuthType::None;
             loc.auth_level = AuthLevel::Anon;
-            diags.log(Severity::Warn, l, format!(
-                "\"AuthClass {value}\" is deprecated; consider removing it from line {l}."));
+            diags.log(
+                Severity::Warn,
+                l,
+                format!("\"AuthClass {value}\" is deprecated; consider removing it from line {l}."),
+            );
         } else if eq(value, "user") {
             loc.auth_level = AuthLevel::User;
             diags.log(Severity::Warn, l, format!(
@@ -211,8 +211,11 @@ pub fn parse_aaa<D: Diag>(
             diags.log(Severity::Warn, l, format!(
                 "\"AuthClass {value}\" is deprecated; consider using \"Require user @SYSTEM\" on line {l} of {filename}."));
         } else {
-            diags.log(Severity::Warn, l, format!(
-                "Unknown authorization class {value} on line {l} of {filename}."));
+            diags.log(
+                Severity::Warn,
+                l,
+                format!("Unknown authorization class {value} on line {l} of {filename}."),
+            );
             return AaaResult::Error;
         }
     } else if eq(name, "AuthGroupName") {
@@ -235,8 +238,11 @@ pub fn parse_aaa<D: Diag>(
                 loc.auth_level = AuthLevel::Group;
             }
         } else {
-            diags.log(Severity::Warn, l, format!(
-                "Unknown Require type {kind} on line {l} of {filename}."));
+            diags.log(
+                Severity::Warn,
+                l,
+                format!("Unknown Require type {kind} on line {l} of {filename}."),
+            );
             return AaaResult::Error;
         }
         for w in words {
@@ -248,8 +254,11 @@ pub fn parse_aaa<D: Diag>(
         } else if eq(value, "any") {
             loc.satisfy = Satisfy::Any;
         } else {
-            diags.log(Severity::Warn, l, format!(
-                "Unknown Satisfy value {value} on line {l} of {filename}."));
+            diags.log(
+                Severity::Warn,
+                l,
+                format!("Unknown Satisfy value {value} on line {l} of {filename}."),
+            );
             return AaaResult::Error;
         }
     } else {
@@ -303,12 +312,12 @@ impl HostMask {
     ///
     /// Port of the `parse_aaa` allow/deny branch + `get_addr_and_mask`.
     pub fn parse_list(value: &str) -> impl Iterator<Item = Result<Self, String>> + '_ {
-        let mut tokens: Vec<String> = value
-            .split_whitespace()
-            .map(ToString::to_string)
-            .collect();
+        let mut tokens: Vec<String> = value.split_whitespace().map(ToString::to_string).collect();
         // Strip leading "from".
-        if tokens.first().is_some_and(|t| t.eq_ignore_ascii_case("from")) {
+        if tokens
+            .first()
+            .is_some_and(|t| t.eq_ignore_ascii_case("from"))
+        {
             tokens.remove(0);
         }
         tokens.into_iter().map(|tok| Self::parse_one(&tok))
@@ -335,10 +344,7 @@ impl HostMask {
             });
         }
         let first = tok.as_bytes()[0];
-        if first == b'*'
-            || first == b'.'
-            || (!first.is_ascii_digit() && first != b'[')
-        {
+        if first == b'*' || first == b'.' || (!first.is_ascii_digit() && first != b'[') {
             let name = tok.strip_prefix('*').unwrap_or(tok);
             return Ok(Self::Name(name.to_string()));
         }
@@ -349,6 +355,7 @@ impl HostMask {
     ///
     /// `@LOCAL` matches only loopback; name masks match suffixes; IP
     /// masks do masked compare.
+    #[must_use]
     pub fn matches(&self, addr: &std::net::IpAddr) -> bool {
         match self {
             Self::Ip { addr: net, mask } => ip_match(addr, net, mask),
@@ -363,6 +370,7 @@ impl HostMask {
     }
 
     /// Does `hostname` satisfy this name mask (suffix match like cupsd)?
+    #[must_use]
     pub fn matches_name(&self, hostname: &str) -> bool {
         match self {
             Self::Name(pattern) => {
@@ -438,8 +446,9 @@ fn parse_ip_mask(value: &str) -> Result<HostMask, String> {
                     }
                     IpNet::V6(prefix_mask_v6(bits))
                 } else {
-                    let mv: std::net::Ipv6Addr =
-                        m.parse().map_err(|_| format!("Bad netmask value {value}"))?;
+                    let mv: std::net::Ipv6Addr = m
+                        .parse()
+                        .map_err(|_| format!("Bad netmask value {value}"))?;
                     IpNet::V6(mv.octets())
                 }
             }

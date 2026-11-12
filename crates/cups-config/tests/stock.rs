@@ -4,7 +4,7 @@
 use cups_config::*;
 
 /// The stock cupsd.conf as a configure would emit it on Linux.
-const CUPSD_CONF: &str = r#"
+const CUPSD_CONF: &str = r"
 LogLevel warn
 PageLogFormat
 
@@ -135,9 +135,9 @@ WebInterface Yes
     Order deny,allow
   </Limit>
 </Policy>
-"#;
+";
 
-const CUPS_FILES_CONF: &str = r#"
+const CUPS_FILES_CONF: &str = r"
 SystemGroup sys root wheel
 FileDevice No
 Printcap /run/cups/printcap
@@ -145,7 +145,7 @@ PeerCred on
 AccessLog /var/log/cups/access_log
 ErrorLog /var/log/cups/error_log
 PageLog /var/log/cups/page_log
-"#;
+";
 
 #[test]
 fn stock_cupsd_conf_parses_clean() {
@@ -183,11 +183,7 @@ fn stock_cupsd_conf_parses_clean() {
     assert!(paths.contains(&"/admin"));
     assert!(paths.contains(&"/admin/conf"));
     assert!(paths.contains(&"/admin/log"));
-    let admin = cfg
-        .locations
-        .iter()
-        .find(|l| l.path == "/admin")
-        .unwrap();
+    let admin = cfg.locations.iter().find(|l| l.path == "/admin").unwrap();
     assert_eq!(admin.auth_type, AuthType::Default);
     assert_eq!(admin.auth_level, AuthLevel::User);
     assert_eq!(admin.names, vec!["@SYSTEM"]);
@@ -196,11 +192,7 @@ fn stock_cupsd_conf_parses_clean() {
     // Policies: default + authenticated, op-expanded.
     assert!(cfg.policies.iter().any(|p| p.name == "default"));
     assert!(cfg.policies.iter().any(|p| p.name == "authenticated"));
-    let default = cfg
-        .policies
-        .iter()
-        .find(|p| p.name == "default")
-        .unwrap();
+    let default = cfg.policies.iter().find(|p| p.name == "default").unwrap();
     assert_eq!(default.job_access, vec!["@OWNER", "@SYSTEM"]);
     assert!(default
         .job_values
@@ -232,10 +224,7 @@ fn stock_cups_files_conf_parses_clean() {
     // Unknown groups warn but don't fail without resolver.
     assert!(cfg.file_device.is_none());
     assert_eq!(cfg.peer_cred, PeerCred::On);
-    assert_eq!(
-        cfg.access_log.as_deref(),
-        Some("/var/log/cups/access_log")
-    );
+    assert_eq!(cfg.access_log.as_deref(), Some("/var/log/cups/access_log"));
 }
 
 #[test]
@@ -255,11 +244,8 @@ fn typed_var_edge_cases() {
     let (c, _) = parse_cupsd_conf(b"LimitRequestBody 2m\n".as_slice(), "x");
     assert_eq!(c.max_request_size, 2 * 1024 * 1024);
     // Octal perms
-    let (_f, _fat, _) = parse_cups_files_conf(
-        b"ConfigFilePerm 0600\n".as_slice(),
-        "x",
-        "/etc/cups",
-    );
+    let (_f, _fat, _) =
+        parse_cups_files_conf(b"ConfigFilePerm 0600\n".as_slice(), "x", "/etc/cups");
 }
 
 #[test]
@@ -274,7 +260,8 @@ fn bad_directive_fatal_unknown() {
 #[test]
 fn limit_except_inverts() {
     let (c, d) = parse_cupsd_conf(
-        b"<Location /x>\n<LimitExcept POST>\nRequire user @SYSTEM\n</LimitExcept>\n</Location>\n".as_slice(),
+        b"<Location /x>\n<LimitExcept POST>\nRequire user @SYSTEM\n</LimitExcept>\n</Location>\n"
+            .as_slice(),
         "x",
     );
     assert!(!d.has_errors());

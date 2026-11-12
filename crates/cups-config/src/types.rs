@@ -14,7 +14,7 @@ pub enum Encryption {
     IfRequested,
     /// Require TLS for all requests on this path.
     Required,
-    /// Listener-level TLS (SSLListen) — always encrypted, no upgrade.
+    /// Listener-level TLS (`SSLListen`) — always encrypted, no upgrade.
     Always,
 }
 
@@ -93,7 +93,7 @@ pub mod limit {
     pub const IPP: u32 = 128;
 }
 
-/// `cupsdLogLevel` — error_log verbosity (`CUPSD_LOG_*`).
+/// `cupsdLogLevel` — `error_log` verbosity (`CUPSD_LOG_*`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PartialOrd, Ord)]
 pub enum LogLevel {
     /// No logging.
@@ -121,6 +121,7 @@ pub enum LogLevel {
 
 impl LogLevel {
     /// Parse a `LogLevel` directive value.
+    #[must_use]
     pub fn parse(v: &str) -> Option<Self> {
         Some(match v.to_ascii_lowercase().as_str() {
             "debug2" => Self::Debug2,
@@ -138,6 +139,7 @@ impl LogLevel {
     }
 
     /// cupsd.conf string form.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Debug2 => "debug2",
@@ -160,7 +162,7 @@ impl fmt::Display for LogLevel {
     }
 }
 
-/// `CUPSD_ACCESSLOG_*` — what goes to access_log.
+/// `CUPSD_ACCESSLOG_*` — what goes to `access_log`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AccessLogLevel {
     /// Log nothing.
@@ -174,7 +176,7 @@ pub enum AccessLogLevel {
     All,
 }
 
-/// `CUPSD_TIME_*` — error_log timestamp format.
+/// `CUPSD_TIME_*` — `error_log` timestamp format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LogTimeFormat {
     /// Standard Apache/CLF format.
@@ -242,6 +244,7 @@ impl FatalErrors {
 
     /// Parse the `FatalErrors` directive value
     /// (`none all browse config listen log permissions unknown`, `-x` removes).
+    #[must_use]
     pub fn parse(s: Option<&str>) -> (Self, Vec<String>) {
         let mut fatal = 0u32;
         let mut bad = Vec::new();
@@ -275,6 +278,7 @@ impl FatalErrors {
     }
 
     /// True if `mask` bits are set fatal.
+    #[must_use]
     pub fn has(self, mask: Self) -> bool {
         self.0 & mask.0 != 0
     }
@@ -356,7 +360,7 @@ impl Default for TlsOptions {
 /// TLS protocol version selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TlsVersion {
-    /// SSLv3 (only via AllowSSL3 — rustls cannot honor this).
+    /// `SSLv3` (only via `AllowSSL3` — rustls cannot honor this).
     Ssl3,
     /// TLS 1.0.
     V1_0,
@@ -396,6 +400,7 @@ pub enum IpNet {
 
 impl IpNet {
     /// Number of address bits.
+    #[must_use]
     pub fn bits(&self) -> u32 {
         match self {
             Self::V4(_) => 32,

@@ -60,7 +60,7 @@ mod tests {
         assert_eq!(back.version, (2, 0));
         assert_eq!(back.code, ops::op::GET_PRINTER_ATTRIBUTES);
         assert_eq!(back.request_id, 7);
-        assert!(back.groups.is_empty());
+        assert_eq!(back.groups, [] as [model::Group; 0]);
     }
 
     #[test]

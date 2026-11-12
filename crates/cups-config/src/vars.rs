@@ -13,7 +13,7 @@ pub enum VarType {
     Size,
     /// Octal file permission.
     Perm,
-    /// Seconds with `m`/`h`/`d`/`w` suffix; PreserveJob* also take booleans.
+    /// Seconds with `m`/`h`/`d`/`w` suffix; `PreserveJob`* also take booleans.
     Time,
     /// yes/no/on/off/true/false/enabled/disabled/1/0.
     Boolean,
@@ -178,8 +178,8 @@ pub fn parse_variable_files<D: Diag>(
     if ty == VarType::Pathname {
         if let Some(v) = value {
             let joined = join_server_root(server_root, v.to_string());
-            let skip = v.eq_ignore_ascii_case("internal")
-                || name.eq_ignore_ascii_case("ServerKeychain");
+            let skip =
+                v.eq_ignore_ascii_case("internal") || name.eq_ignore_ascii_case("ServerKeychain");
             if !skip && !std::path::Path::new(&joined).exists() {
                 diags.log(
                     Severity::Error,
@@ -232,16 +232,14 @@ fn coerce<D: Diag>(
                 return Err(());
             }
             // strtol base 0 semantics: 0x hex, 0 octal, else decimal.
-            let (digits, radix) = if let Some(h) = v
-                .strip_prefix("0x")
-                .or_else(|| v.strip_prefix("0X"))
-            {
-                (h, 16)
-            } else if v.len() > 1 && v.starts_with('0') {
-                (&v[1..], 8)
-            } else {
-                (v, 10)
-            };
+            let (digits, radix) =
+                if let Some(h) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+                    (h, 16)
+                } else if v.len() > 1 && v.starts_with('0') {
+                    (&v[1..], 8)
+                } else {
+                    (v, 10)
+                };
             match i64::from_str_radix(digits, radix) {
                 Ok(n) if (0..=i64::from(i32::MAX)).contains(&n) => Ok(Typed::Int(n)),
                 _ => {
@@ -287,12 +285,11 @@ fn coerce<D: Diag>(
                 lerr("Bad permissions value");
                 return Err(());
             }
-            match u32::from_str_radix(v, 8) {
-                Ok(n) => Ok(Typed::Perm(n)),
-                Err(_) => {
-                    lerr("Bad permissions value");
-                    Err(())
-                }
+            if let Ok(n) = u32::from_str_radix(v, 8) {
+                Ok(Typed::Perm(n))
+            } else {
+                lerr("Bad permissions value");
+                Err(())
             }
         }
         VarType::Time => {
@@ -301,13 +298,14 @@ fn coerce<D: Diag>(
                 return Err(());
             };
             // PreserveJob* special case: yes/true/on/enabled → INT_MAX.
-            if name.len() >= 11 && name[..11].eq_ignore_ascii_case("PreserveJob") {
-                if matches!(
+            if name.len() >= 11
+                && name[..11].eq_ignore_ascii_case("PreserveJob")
+                && matches!(
                     v.to_ascii_lowercase().as_str(),
                     "true" | "on" | "enabled" | "yes"
-                ) {
-                    return Ok(Typed::Time(i64::from(i32::MAX)));
-                }
+                )
+            {
+                return Ok(Typed::Time(i64::from(i32::MAX)));
             }
             match v.to_ascii_lowercase().as_str() {
                 "false" | "off" | "disabled" | "no" => return Ok(Typed::Time(0)),
@@ -332,7 +330,7 @@ fn coerce<D: Diag>(
                     return Err(());
                 }
             }
-            if !(0.0..=(i32::MAX as f64)).contains(&n) {
+            if !(0.0..=f64::from(i32::MAX)).contains(&n) {
                 lerr("Bad time value");
                 return Err(());
             }

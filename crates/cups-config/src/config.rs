@@ -7,11 +7,11 @@ use std::io::BufRead;
 use std::net::ToSocketAddrs;
 
 use crate::acl::{parse_aaa, AaaResult, Diag, Location, Severity};
-use crate::lexer::{ConfLines, ConfLine};
+use crate::lexer::{ConfLine, ConfLines};
 use crate::types::{
-    limit, AccessLogLevel, AuthLevel, AuthType, BrowseProtocols, Encryption,
-    FatalErrors, ListenAddr, Listener, LogLevel, LogTimeFormat, OrderType,
-    PeerCred, PrintcapFormat, Sandboxing, TlsOptions, TlsVersion,
+    limit, AccessLogLevel, AuthLevel, AuthType, BrowseProtocols, Encryption, FatalErrors,
+    ListenAddr, Listener, LogLevel, LogTimeFormat, OrderType, PeerCred, PrintcapFormat, Sandboxing,
+    TlsOptions, TlsVersion,
 };
 use crate::vars::{parse_variable_cupsd, parse_variable_files};
 
@@ -46,6 +46,7 @@ impl Diagnostics {
     }
 
     /// Did any Error-severity diagnostic occur?
+    #[must_use]
     pub fn has_errors(&self) -> bool {
         self.entries.iter().any(|e| e.severity == Severity::Error)
     }
@@ -344,6 +345,7 @@ pub struct CupsFilesConfig {
 
 impl CupsdConfig {
     /// Defaults exactly as `cupsdReadConfiguration` sets them pre-parse.
+    #[must_use]
     pub fn defaults() -> Self {
         Self {
             listeners: Vec::new(),
@@ -381,10 +383,13 @@ impl CupsdConfig {
             access_log_level: AccessLogLevel::Actions,
             log_debug_history: 200,
             max_log_size: 1024 * 1024,
-            page_log_format: Some(concat!(
-                "%p %u %j %T %P %C %{job-billing} ",
-                "%{job-originating-host-name} %{job-name} %{media} %{sides}"
-            ).to_string()),
+            page_log_format: Some(
+                concat!(
+                    "%p %u %j %T %P %C %{job-billing} ",
+                    "%{job-originating-host-name} %{job-name} %{media} %{sides}"
+                )
+                .to_string(),
+            ),
 
             fatal_errors: FatalErrors::default(),
             error_policy: Some("stop-printer".to_string()),
@@ -406,7 +411,7 @@ impl CupsdConfig {
             max_jobs_per_user: 0,
             max_jobs_per_printer: 0,
             max_copies: 9999,
-            max_job_time: 10800, // 3 hours default
+            max_job_time: 10800,            // 3 hours default
             preserve_job_history: i32::MAX, // DEFAULT_HISTORY
             preserve_job_files: 86400,      // DEFAULT_FILES
             job_kill_delay: 300,            // DEFAULT_TIMEOUT
@@ -443,6 +448,7 @@ impl CupsdConfig {
 
 impl CupsFilesConfig {
     /// Defaults exactly as `cupsdReadConfiguration` sets them pre-parse.
+    #[must_use]
     pub fn defaults() -> Self {
         Self {
             access_log: Some("/var/log/cups/access_log".to_string()),
@@ -604,7 +610,13 @@ pub fn read_cups_files_conf<R: BufRead>(
                 } else if v.starts_with('^') {
                     v.to_string()
                 } else {
-                    err!(ln, "Unsupported FileDevice \"{}\" on line {} of {}.", v, ln, filename);
+                    err!(
+                        ln,
+                        "Unsupported FileDevice \"{}\" on line {} of {}.",
+                        v,
+                        ln,
+                        filename
+                    );
                     fatal_if!(FatalErrors::CONFIG);
                     cfg.file_device = None;
                     continue;
@@ -618,7 +630,13 @@ pub fn read_cups_files_conf<R: BufRead>(
             } else if let Some(gid) = resolve_group(v) {
                 cfg.group = gid;
             } else {
-                err!(ln, "Unknown Group \"{}\" on line {} of {}.", v, ln, filename);
+                err!(
+                    ln,
+                    "Unknown Group \"{}\" on line {} of {}.",
+                    v,
+                    ln,
+                    filename
+                );
                 fatal_if!(FatalErrors::CONFIG);
             }
         } else if name.eq_ignore_ascii_case("LogFileGroup") && value.is_some() {
@@ -628,7 +646,13 @@ pub fn read_cups_files_conf<R: BufRead>(
             } else if let Some(gid) = resolve_group(v) {
                 cfg.log_file_group = Some(gid);
             } else {
-                err!(ln, "Unknown LogFileGroup \"{}\" on line {} of {}.", v, ln, filename);
+                err!(
+                    ln,
+                    "Unknown LogFileGroup \"{}\" on line {} of {}.",
+                    v,
+                    ln,
+                    filename
+                );
                 fatal_if!(FatalErrors::CONFIG);
             }
         } else if name.eq_ignore_ascii_case("OAuthGroup") && value.is_some() {
@@ -644,16 +668,31 @@ pub fn read_cups_files_conf<R: BufRead>(
             if !file.is_empty() && std::path::Path::new(&joined).exists() {
                 cfg.oauth_groups.push((gname.to_string(), joined));
             } else {
-                err!(ln, "Unable to read OAuthGroup file \"{}\" on line {} of {}.", joined, ln, filename);
+                err!(
+                    ln,
+                    "Unable to read OAuthGroup file \"{}\" on line {} of {}.",
+                    joined,
+                    ln,
+                    filename
+                );
                 fatal_if!(FatalErrors::CONFIG);
             }
         } else if name.eq_ignore_ascii_case("PassEnv") && value.is_some() {
-            for var in value.unwrap().split(|c: char| c.is_whitespace() || c == ',') {
+            for var in value
+                .unwrap()
+                .split(|c: char| c.is_whitespace() || c == ',')
+            {
                 if var.is_empty() {
                     continue;
                 }
                 if PROHIBITED_ENV.contains(&var) {
-                    err!(ln, "Environment variable \"{}\" cannot be passed through on line {} of {}.", var, ln, filename);
+                    err!(
+                        ln,
+                        "Environment variable \"{}\" cannot be passed through on line {} of {}.",
+                        var,
+                        ln,
+                        filename
+                    );
                     fatal_if!(FatalErrors::CONFIG);
                 } else {
                     cfg.pass_env.push(var.to_string());
@@ -665,7 +704,13 @@ pub fn read_cups_files_conf<R: BufRead>(
                 "on" => cfg.peer_cred = PeerCred::On,
                 "root-only" => cfg.peer_cred = PeerCred::RootOnly,
                 v => {
-                    err!(ln, "Unknown PeerCred \"{}\" on line {} of {}.", v, ln, filename);
+                    err!(
+                        ln,
+                        "Unknown PeerCred \"{}\" on line {} of {}.",
+                        v,
+                        ln,
+                        filename
+                    );
                     fatal_if!(FatalErrors::CONFIG);
                 }
             }
@@ -675,7 +720,13 @@ pub fn read_cups_files_conf<R: BufRead>(
                 "plist" => cfg.printcap_format = PrintcapFormat::Plist,
                 "solaris" => cfg.printcap_format = PrintcapFormat::Solaris,
                 v => {
-                    err!(ln, "Unknown PrintcapFormat \"{}\" on line {} of {}.", v, ln, filename);
+                    err!(
+                        ln,
+                        "Unknown PrintcapFormat \"{}\" on line {} of {}.",
+                        v,
+                        ln,
+                        filename
+                    );
                     fatal_if!(FatalErrors::CONFIG);
                 }
             }
@@ -685,7 +736,13 @@ pub fn read_cups_files_conf<R: BufRead>(
                 "relaxed" => cfg.sandboxing = Sandboxing::Relaxed,
                 "strict" => cfg.sandboxing = Sandboxing::Strict,
                 v => {
-                    err!(ln, "Unknown Sandboxing \"{}\" on line {} of {}.", v, ln, filename);
+                    err!(
+                        ln,
+                        "Unknown Sandboxing \"{}\" on line {} of {}.",
+                        v,
+                        ln,
+                        filename
+                    );
                     fatal_if!(FatalErrors::CONFIG);
                 }
             }
@@ -693,11 +750,22 @@ pub fn read_cups_files_conf<R: BufRead>(
             let v = value.unwrap();
             let mut parts = v.splitn(2, char::is_whitespace);
             let var = parts.next().unwrap_or("");
-            let val = parts.next().map(str::trim_start).unwrap_or("");
+            let val = parts.next().map_or("", str::trim_start);
             if val.is_empty() {
-                err!(ln, "Missing value for SetEnv directive on line {} of {}.", ln, filename);
+                err!(
+                    ln,
+                    "Missing value for SetEnv directive on line {} of {}.",
+                    ln,
+                    filename
+                );
             } else if PROHIBITED_ENV.contains(&var) {
-                err!(ln, "Environment variable \"{}\" cannot be set  on line {} of {}.", var, ln, filename);
+                err!(
+                    ln,
+                    "Environment variable \"{}\" cannot be set  on line {} of {}.",
+                    var,
+                    ln,
+                    filename
+                );
                 fatal_if!(FatalErrors::CONFIG);
             } else {
                 cfg.set_env.push((var.to_string(), val.to_string()));
@@ -708,7 +776,13 @@ pub fn read_cups_files_conf<R: BufRead>(
                     cfg.system_groups.push(gid);
                     cfg.system_group_names.push(gname);
                 } else {
-                    err!(ln, "Unknown SystemGroup \"{}\" on line {} of {}.", gname, ln, filename);
+                    err!(
+                        ln,
+                        "Unknown SystemGroup \"{}\" on line {} of {}.",
+                        gname,
+                        ln,
+                        filename
+                    );
                     fatal_if!(FatalErrors::CONFIG);
                 }
             }
@@ -739,15 +813,7 @@ pub fn read_cups_files_conf<R: BufRead>(
             info!(ln, "The \"{}\" directive on line {} of {} is no longer supported; this will become an error in a future release.", name, ln, filename);
         } else {
             let mut sink = diags.sink(filename);
-            match parse_variable_files(
-                cfg,
-                server_root,
-                name,
-                value,
-                ln,
-                filename,
-                &mut sink,
-            ) {
+            match parse_variable_files(cfg, server_root, name, value, ln, filename, &mut sink) {
                 Ok(_) => {}
                 Err(()) => {
                     if fatal.has(FatalErrors::CONFIG) || fatal.has(FatalErrors::UNKNOWN) {
@@ -895,14 +961,20 @@ pub fn read_cupsd_conf<R: BufRead>(
             if !read_policy(&mut lines, cfg, &pname, ln, filename, diags) {
                 return false;
             }
-        } else if name.eq_ignore_ascii_case("FaxRetryInterval")
-            && line.value.is_some()
-        {
+        } else if name.eq_ignore_ascii_case("FaxRetryInterval") && line.value.is_some() {
             cfg.job_retry_interval = line.value.as_deref().unwrap().parse().unwrap_or(0);
-            warn!(ln, "FaxRetryInterval is deprecated; use JobRetryInterval on line {} of {}.", ln, filename);
+            warn!(
+                ln,
+                "FaxRetryInterval is deprecated; use JobRetryInterval on line {} of {}.",
+                ln,
+                filename
+            );
         } else if name.eq_ignore_ascii_case("FaxRetryLimit") && line.value.is_some() {
             cfg.job_retry_limit = line.value.as_deref().unwrap().parse().unwrap_or(0);
-            warn!(ln, "FaxRetryLimit is deprecated; use JobRetryLimit on line {} of {}.", ln, filename);
+            warn!(
+                ln,
+                "FaxRetryLimit is deprecated; use JobRetryLimit on line {} of {}.", ln, filename
+            );
         } else if name.eq_ignore_ascii_case("SSLOptions") {
             parse_ssl_options(&line, &mut cfg.tls_options, filename, diags);
         } else if (name.eq_ignore_ascii_case("Port")
@@ -911,8 +983,8 @@ pub fn read_cupsd_conf<R: BufRead>(
             || name.eq_ignore_ascii_case("SSLListen"))
             && line.value.is_some()
         {
-            let ssl = name.eq_ignore_ascii_case("SSLPort")
-                || name.eq_ignore_ascii_case("SSLListen");
+            let ssl =
+                name.eq_ignore_ascii_case("SSLPort") || name.eq_ignore_ascii_case("SSLListen");
             let v = line.value.as_deref().unwrap();
             add_listeners(cfg, v, ssl, ln, filename, diags);
         } else if name.eq_ignore_ascii_case("BrowseProtocols")
@@ -922,7 +994,13 @@ pub fn read_cupsd_conf<R: BufRead>(
                 Some(v) => match BrowseProtocols::parse(v) {
                     Ok(p) => cfg.browse_local_protocols = p,
                     Err(bad) => {
-                        err!(ln, "Unknown browse protocol \"{}\" on line {} of {}.", bad, ln, filename);
+                        err!(
+                            ln,
+                            "Unknown browse protocol \"{}\" on line {} of {}.",
+                            bad,
+                            ln,
+                            filename
+                        );
                         break;
                     }
                 },
@@ -945,12 +1023,14 @@ pub fn read_cupsd_conf<R: BufRead>(
             } else {
                 None
             };
-            match t {
-                Some(t) => cfg.default_auth_type = t,
-                None => {
-                    warn!(ln, "Unknown default authorization type {} on line {} of {}.", v, ln, filename);
-                    fatal_cfg!();
-                }
+            if let Some(t) = t {
+                cfg.default_auth_type = t
+            } else {
+                warn!(
+                    ln,
+                    "Unknown default authorization type {} on line {} of {}.", v, ln, filename
+                );
+                fatal_cfg!();
             }
         } else if name.eq_ignore_ascii_case("DefaultEncryption") {
             let v = line.value.as_deref();
@@ -966,7 +1046,10 @@ pub fn read_cupsd_conf<R: BufRead>(
                     cfg.default_encryption = Encryption::IfRequested;
                 }
                 Some(v) => {
-                    warn!(ln, "Unknown default encryption {} on line {} of {}.", v, ln, filename);
+                    warn!(
+                        ln,
+                        "Unknown default encryption {} on line {} of {}.", v, ln, filename
+                    );
                     fatal_cfg!();
                 }
             }
@@ -979,7 +1062,10 @@ pub fn read_cupsd_conf<R: BufRead>(
             } else if v.eq_ignore_ascii_case("double") {
                 cfg.host_name_lookups = 2;
             } else {
-                warn!(ln, "Unknown HostNameLookups {} on line {} of {}.", v, ln, filename);
+                warn!(
+                    ln,
+                    "Unknown HostNameLookups {} on line {} of {}.", v, ln, filename
+                );
             }
         } else if name.eq_ignore_ascii_case("AccessLogLevel") && line.value.is_some() {
             match line.value.as_deref().unwrap().to_ascii_lowercase().as_str() {
@@ -987,18 +1073,30 @@ pub fn read_cupsd_conf<R: BufRead>(
                 "actions" => cfg.access_log_level = AccessLogLevel::Actions,
                 "config" => cfg.access_log_level = AccessLogLevel::Config,
                 "none" => cfg.access_log_level = AccessLogLevel::None,
-                v => warn!(ln, "Unknown AccessLogLevel {} on line {} of {}.", v, ln, filename),
+                v => warn!(
+                    ln,
+                    "Unknown AccessLogLevel {} on line {} of {}.", v, ln, filename
+                ),
             }
         } else if name.eq_ignore_ascii_case("LogLevel") && line.value.is_some() {
             match LogLevel::parse(line.value.as_deref().unwrap()) {
                 Some(l) => cfg.log_level = l,
-                None => warn!(ln, "Unknown LogLevel {} on line {} of {}.", line.value.as_deref().unwrap(), ln, filename),
+                None => warn!(
+                    ln,
+                    "Unknown LogLevel {} on line {} of {}.",
+                    line.value.as_deref().unwrap(),
+                    ln,
+                    filename
+                ),
             }
         } else if name.eq_ignore_ascii_case("LogTimeFormat") && line.value.is_some() {
             match line.value.as_deref().unwrap().to_ascii_lowercase().as_str() {
                 "standard" => cfg.log_time_format = LogTimeFormat::Standard,
                 "usecs" => cfg.log_time_format = LogTimeFormat::Usecs,
-                v => warn!(ln, "Unknown LogTimeFormat {} on line {} of {}.", v, ln, filename),
+                v => warn!(
+                    ln,
+                    "Unknown LogTimeFormat {} on line {} of {}.", v, ln, filename
+                ),
             }
         } else if name.eq_ignore_ascii_case("ReadyPaperSizes") && line.value.is_some() {
             cfg.ready_paper_sizes.extend(
@@ -1047,7 +1145,10 @@ pub fn read_cupsd_conf<R: BufRead>(
             } else if v.eq_ignore_ascii_case("None") {
                 cfg.server_header = String::new();
             } else {
-                warn!(ln, "Unknown ServerTokens {} on line {} of {}.", v, ln, filename);
+                warn!(
+                    ln,
+                    "Unknown ServerTokens {} on line {} of {}.", v, ln, filename
+                );
             }
         } else if name.eq_ignore_ascii_case("ServerAlias") && line.value.is_some() {
             for a in line
@@ -1183,9 +1284,10 @@ fn add_listeners(
             std::net::SocketAddr::from(([0, 0, 0, 0], port)),
             std::net::SocketAddr::from(([0u16; 8], port)),
         ],
-        Some(h) => match (h, port).to_socket_addrs() {
-            Ok(it) => it.collect(),
-            Err(_) => {
+        Some(h) => {
+            if let Ok(it) = (h, port).to_socket_addrs() {
+                it.collect()
+            } else {
                 diags.entries.push(Diagnostic {
                     severity: Severity::Error,
                     file: filename.to_string(),
@@ -1194,7 +1296,7 @@ fn add_listeners(
                 });
                 return;
             }
-        },
+        }
     };
 
     for a in addrs {
@@ -1208,7 +1310,10 @@ fn add_listeners(
             });
             continue;
         }
-        cfg.listeners.push(Listener { addr: addr.clone(), ssl });
+        cfg.listeners.push(Listener {
+            addr: addr.clone(),
+            ssl,
+        });
         if let ListenAddr::Tcp(sa) = &addr {
             if !sa.ip().is_loopback() {
                 cfg.remote_port = sa.port();
@@ -1217,7 +1322,7 @@ fn add_listeners(
     }
 }
 
-/// Split `host:port`/`[v6]:port`/bare forms (port of get_address).
+/// Split `host:port`/`[v6]:port`/bare forms (port of `get_address`).
 fn split_host_port(value: &str, defport: u16) -> (Option<String>, u16) {
     if let Some(rb) = value.rfind(']') {
         // [v6] or [v6]:port
@@ -1261,7 +1366,11 @@ fn read_location<R: BufRead>(
 ) -> bool {
     let fatal = cfg.fatal_errors;
 
-    if cfg.locations.iter().any(|l| l.path == path && l.limit == limit::ALL) {
+    if cfg
+        .locations
+        .iter()
+        .any(|l| l.path == path && l.limit == limit::ALL)
+    {
         diags.entries.push(Diagnostic {
             severity: Severity::Warn,
             file: filename.to_string(),
@@ -1278,7 +1387,7 @@ fn read_location<R: BufRead>(
     // `loc` = index of the currently-edited location.
     let mut cur_idx = parent_idx;
 
-    while let Some(line) = lines.next() {
+    for line in lines.by_ref() {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
@@ -1296,9 +1405,7 @@ fn read_location<R: BufRead>(
 
         if name.eq_ignore_ascii_case("</Location>") {
             return true;
-        } else if name.eq_ignore_ascii_case("<Limit")
-            || name.eq_ignore_ascii_case("<LimitExcept")
-        {
+        } else if name.eq_ignore_ascii_case("<Limit") || name.eq_ignore_ascii_case("<LimitExcept") {
             let Some(v) = line.value.as_deref() else {
                 diags.entries.push(Diagnostic {
                     severity: Severity::Error,
@@ -1337,16 +1444,14 @@ fn read_location<R: BufRead>(
                         severity: Severity::Warn,
                         file: filename.to_string(),
                         line: ln,
-                        message: format!(
-                            "Unknown request type {m} on line {ln} of {filename}."
-                        ),
+                        message: format!("Unknown request type {m} on line {ln} of {filename}."),
                     });
                     0
                 };
                 child.limit |= bits;
             }
             if name.eq_ignore_ascii_case("<LimitExcept") {
-                child.limit = limit::ALL ^ child.limit;
+                child.limit ^= limit::ALL;
             }
             cfg.locations[parent_idx].limit &= !child.limit;
             cfg.locations.push(child);
@@ -1434,7 +1539,7 @@ fn read_policy<R: BufRead>(
     let mut cur_ops: Vec<u32> = Vec::new();
     let mut cur_loc: Option<Location> = None;
 
-    while let Some(line) = lines.next() {
+    for line in lines.by_ref() {
         let line = match line {
             Ok(l) => l,
             Err(e) => {
@@ -1483,9 +1588,7 @@ fn read_policy<R: BufRead>(
                         severity: Severity::Error,
                         file: filename.to_string(),
                         line: ln,
-                        message: format!(
-                            "Too many operations listed on line {ln} of {filename}."
-                        ),
+                        message: format!("Too many operations listed on line {ln} of {filename}."),
                     });
                     break;
                 }
@@ -1639,6 +1742,7 @@ fn read_policy<R: BufRead>(
 
 /// Build the synthesized "default" policy cupsd creates when the config
 /// defines none (port of the block at conf.c ~1441-1615).
+#[must_use]
 pub fn default_policy() -> Policy {
     use ipp_codec::ops::op as ops;
 
@@ -1676,7 +1780,7 @@ pub fn default_policy() -> Policy {
         let mut l = Location::new("<policy>");
         l.order = OrderType::Allow;
         l.auth_level = AuthLevel::User;
-        l.names = names.iter().map(|s| s.to_string()).collect();
+        l.names = names.iter().map(|s| (*s).to_string()).collect();
         l
     };
     let auth_loc = |names: &[&str]| {

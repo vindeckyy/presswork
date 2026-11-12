@@ -68,9 +68,9 @@ impl<R: BufRead> Iterator for ConfLines<R> {
             }
 
             // Split directive / value on first whitespace run.
-            let mut it = line.char_indices();
+            let it = line.char_indices();
             let mut end = line.len();
-            while let Some((i, c)) = it.next() {
+            for (i, c) in it {
                 if c.is_whitespace() {
                     end = i;
                     break;
@@ -128,9 +128,7 @@ fn unescape_and_strip(raw: &str) -> String {
     while i < bytes.len() {
         match bytes[i] {
             b'#' => break,
-            b'\\' if i + 1 < bytes.len()
-                && matches!(bytes[i + 1], b'\\' | b'#' | b'n' | b'r') =>
-            {
+            b'\\' if i + 1 < bytes.len() && matches!(bytes[i + 1], b'\\' | b'#' | b'n' | b'r') => {
                 match bytes[i + 1] {
                     b'n' => out.push('\n'),
                     b'r' => out.push('\r'),
@@ -166,9 +164,7 @@ mod tests {
     use super::*;
 
     fn lines(s: &str) -> Vec<ConfLine> {
-        conf_lines(s.as_bytes())
-            .map(|r| r.unwrap())
-            .collect()
+        conf_lines(s.as_bytes()).map(|r| r.unwrap()).collect()
     }
 
     #[test]
