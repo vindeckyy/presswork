@@ -514,7 +514,6 @@ fn stored_attrs(p: &Printer, _ctx: &Ctx) -> Vec<Attribute> {
         tags::TEXT,
         Value::Text(p.info.as_deref().unwrap_or(&p.name).into()),
     );
-    add1(&mut v, "ipp-features-supported", tags::KEYWORD, kw("none"));
     add1(
         &mut v,
         "printer-location",
@@ -1025,6 +1024,301 @@ pub fn common_data(ctx: &Ctx) -> Vec<Attribute> {
             .map(|s| kw(s))
             .collect(),
     );
+    // PWG 5100.12 §6.2 required printer/job-template attributes.
+    add1(&mut v, "output-bin-default", tags::KEYWORD, kw("face-down"));
+    add1(
+        &mut v,
+        "output-bin-supported",
+        tags::KEYWORD,
+        kw("face-down"),
+    );
+    addn(
+        &mut v,
+        "print-quality-supported",
+        tags::ENUM,
+        vec![Value::Enum(3), Value::Enum(4), Value::Enum(5)],
+    );
+    let res600 = Value::Resolution {
+        x: 600,
+        y: 600,
+        units: 3, // dots-per-inch
+    };
+    add1(
+        &mut v,
+        "printer-resolution-default",
+        tags::RESOLUTION,
+        res600.clone(),
+    );
+    addn(
+        &mut v,
+        "printer-resolution-supported",
+        tags::RESOLUTION,
+        vec![res600.clone(), res600],
+    );
+    addn(
+        &mut v,
+        "media-size-supported",
+        tags::BEGIN_COLLECTION,
+        [
+            (21590, 27940),
+            (21590, 35560),
+            (21000, 29700),
+            (10477, 24130),
+        ]
+        .iter()
+        .map(|&(x, y)| {
+            Value::Collection(vec![
+                Attribute::new("x-dimension", tags::INTEGER, vec![Value::Integer(x)]),
+                Attribute::new("y-dimension", tags::INTEGER, vec![Value::Integer(y)]),
+            ])
+        })
+        .collect(),
+    );
+    addn(
+        &mut v,
+        "media-type-supported",
+        tags::KEYWORD,
+        [
+            "stationery",
+            "stationery-letterhead",
+            "cardstock",
+            "envelope",
+        ]
+        .iter()
+        .map(|s| kw(s))
+        .collect(),
+    );
+    add1(
+        &mut v,
+        "pages-per-minute",
+        tags::INTEGER,
+        Value::Integer(30),
+    );
+    // ── IPP Everywhere (PWG 5100.14) required attributes ─────────────
+    // Job hold/sheets.
+    add1(
+        &mut v,
+        "job-hold-until-default",
+        tags::KEYWORD,
+        kw("no-hold"),
+    );
+    add1(
+        &mut v,
+        "job-priority-default",
+        tags::INTEGER,
+        Value::Integer(50),
+    );
+    add1(
+        &mut v,
+        "job-sheets-default",
+        tags::NAME,
+        Value::Name("none".into()),
+    );
+    // Ready media: the media-col actually loaded + its names.
+    addn(
+        &mut v,
+        "media-col-ready",
+        tags::BEGIN_COLLECTION,
+        vec![media_col_db(21590, 27940)],
+    );
+    addn(
+        &mut v,
+        "media-ready",
+        tags::KEYWORD,
+        ["na_letter_8.5x11in"].iter().map(|s| kw(s)).collect(),
+    );
+    addn(
+        &mut v,
+        "media-source-supported",
+        tags::KEYWORD,
+        ["auto", "main", "manual", "by-pass-tray"]
+            .iter()
+            .map(|s| kw(s))
+            .collect(),
+    );
+    // Media margins (hundredths of mm).
+    for (name, mm) in [
+        ("media-bottom-margin-supported", 635),
+        ("media-top-margin-supported", 635),
+        ("media-left-margin-supported", 635),
+        ("media-right-margin-supported", 635),
+    ] {
+        add1(&mut v, name, tags::INTEGER, Value::Integer(mm));
+    }
+    addn(
+        &mut v,
+        "overrides-supported",
+        tags::KEYWORD,
+        [
+            "document-number",
+            "document-numbers",
+            "output-pages",
+            "pages",
+            "orientation-requested",
+            "media",
+            "media-col",
+            "sides",
+        ]
+        .iter()
+        .map(|s| kw(s))
+        .collect(),
+    );
+    addn(
+        &mut v,
+        "print-color-mode-supported",
+        tags::KEYWORD,
+        ["auto", "color", "monochrome"]
+            .iter()
+            .map(|s| kw(s))
+            .collect(),
+    );
+    for (base, kwv) in [
+        ("print-content-optimize", "auto"),
+        ("print-rendering-intent", "auto"),
+    ] {
+        add1(&mut v, &format!("{base}-default"), tags::KEYWORD, kw(kwv));
+        addn(
+            &mut v,
+            &format!("{base}-supported"),
+            tags::KEYWORD,
+            ["auto"].iter().map(|s| kw(s)).collect(),
+        );
+    }
+    addn(
+        &mut v,
+        "pwg-raster-document-resolution-supported",
+        tags::RESOLUTION,
+        vec![
+            Value::Resolution {
+                x: 600,
+                y: 600,
+                units: 3,
+            },
+            Value::Resolution {
+                x: 1200,
+                y: 1200,
+                units: 3,
+            },
+        ],
+    );
+    add1(
+        &mut v,
+        "pwg-raster-document-sheet-back",
+        tags::KEYWORD,
+        kw("normal"),
+    );
+    addn(
+        &mut v,
+        "pwg-raster-document-type-supported",
+        tags::KEYWORD,
+        ["black_1", "sgray_8", "srgb_8", "srgb_16"]
+            .iter()
+            .map(|s| kw(s))
+            .collect(),
+    );
+    // Notifications.
+    addn(
+        &mut v,
+        "notify-events-default",
+        tags::KEYWORD,
+        ["none"].iter().map(|s| kw(s)).collect(),
+    );
+    add1(
+        &mut v,
+        "notify-lease-duration-default",
+        tags::INTEGER,
+        Value::Integer(ctx.max_lease_duration),
+    );
+    // Identify + feature + misc printer-description.
+    addn(
+        &mut v,
+        "identify-actions-default",
+        tags::KEYWORD,
+        ["display"].iter().map(|s| kw(s)).collect(),
+    );
+    addn(
+        &mut v,
+        "identify-actions-supported",
+        tags::KEYWORD,
+        ["display", "sound"].iter().map(|s| kw(s)).collect(),
+    );
+    addn(
+        &mut v,
+        "ipp-features-supported",
+        tags::KEYWORD,
+        ["ipp-everywhere", "subscription-object", "document-object"]
+            .iter()
+            .map(|s| kw(s))
+            .collect(),
+    );
+    add1(
+        &mut v,
+        "preferred-attributes-supported",
+        tags::BOOLEAN,
+        Value::Boolean(true),
+    );
+    add1(
+        &mut v,
+        "printer-device-id",
+        tags::TEXT,
+        Value::Text("MFG:presswork;MDL:ipp-everywhere;CMD:PWG-Raster;".into()),
+    );
+    add1(
+        &mut v,
+        "printer-message-from-operator",
+        tags::TEXT,
+        Value::Text("".into()),
+    );
+    // `printer-alert`/`printer-supply` are RFC 3995 Printer-MIB-encoded
+    // octet strings, not IPP collections.
+    add1(
+        &mut v,
+        "printer-alert",
+        tags::STRING,
+        Value::OctetString(vec![0x05, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+    );
+    add1(
+        &mut v,
+        "printer-alert-description",
+        tags::TEXT,
+        Value::Text("ready".into()),
+    );
+    add1(
+        &mut v,
+        "printer-geo-location",
+        tags::UNKNOWN,
+        Value::Unknown,
+    );
+    add1(
+        &mut v,
+        "printer-organization",
+        tags::TEXT,
+        Value::Text("".into()),
+    );
+    add1(
+        &mut v,
+        "printer-organizational-unit",
+        tags::TEXT,
+        Value::Text("".into()),
+    );
+    add1(
+        &mut v,
+        "printer-supply",
+        tags::STRING,
+        Value::OctetString(vec![0x01, 0x04, 0xff, 0xff, 0xff, 0xff, 0x00]),
+    );
+    add1(
+        &mut v,
+        "printer-supply-description",
+        tags::TEXT,
+        Value::Text("toner".into()),
+    );
+    add1(
+        &mut v,
+        "printer-supply-info-uri",
+        tags::URI,
+        Value::Uri("https://localhost/supplies".into()),
+    );
     add1(
         &mut v,
         "natural-language-configured",
@@ -1265,6 +1559,8 @@ pub fn common_data(ctx: &Ctx) -> Vec<Attribute> {
             "pending-held",
             "processing",
             "processing-stopped",
+            "proof-print",
+            "fetchable",
         ]
         .iter()
         .map(|s| kw(s))

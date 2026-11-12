@@ -172,7 +172,11 @@ impl<'a> Ctx<'a> {
             i32::from(op::HOLD_JOB),
             i32::from(op::RELEASE_JOB),
             i32::from(op::PAUSE_PRINTER),
+            i32::from(op::PAUSE_PRINTER_AFTER_CURRENT_JOB),
             i32::from(op::RESUME_PRINTER),
+            i32::from(op::RESTART_PRINTER),
+            i32::from(op::SHUTDOWN_PRINTER),
+            i32::from(op::STARTUP_PRINTER),
             i32::from(op::PURGE_JOBS),
             i32::from(op::SET_PRINTER_ATTRIBUTES),
             i32::from(op::SET_JOB_ATTRIBUTES),
@@ -208,6 +212,16 @@ impl<'a> Ctx<'a> {
             i32::from(op::CUPS_GET_PPD),
             i32::from(op::CUPS_GET_DOCUMENT),
             i32::from(op::RESTART_JOB),
+            i32::from(op::REPROCESS_JOB),
+            i32::from(op::SUSPEND_CURRENT_JOB),
+            i32::from(op::RESUME_JOB),
+            i32::from(op::PROMOTE_JOB),
+            i32::from(op::SCHEDULE_JOB_AFTER),
+            i32::from(op::CANCEL_DOCUMENT),
+            i32::from(op::GET_DOCUMENT_ATTRIBUTES),
+            i32::from(op::GET_DOCUMENTS),
+            i32::from(op::SET_DOCUMENT_ATTRIBUTES),
+            i32::from(op::RESUBMIT_JOB),
         ];
         ops.sort_unstable();
         Self {
@@ -333,21 +347,24 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
             return resp;
         }
     };
-    let charset_ok = op_group
-        .attributes
-        .first()
-        .is_some_and(|a| a.name == "attributes-charset" && a.values.len() == 1)
-        && matches!(op_group.attributes[0].first(), Some(Value::Charset(t)) if {
-            let s = t.as_str();
-            s.eq_ignore_ascii_case("us-ascii") || s.eq_ignore_ascii_case("utf-8")
-        });
-    let language_ok = op_group
-        .attributes
-        .get(1)
-        .is_some_and(|a| a.name == "attributes-natural-language" && a.values.len() == 1)
-        && matches!(op_group.attributes[1].first(), Some(Value::NaturalLanguage(t)) if valid_lang(&t.as_str()));
-
-    if !charset_ok {
+    // RFC 8011 §4.1.4: the first two operation attributes must be
+    // `attributes-charset` then `attributes-natural-language`, each a
+    // single value. Missing/misplaced → bad-request; an unsupported
+    // *value* → charset-not-supported (charset) or bad-request (language).
+    let charset_attr = op_group.attributes.first();
+    if !charset_attr.is_some_and(|a| a.name == "attributes-charset" && a.values.len() == 1) {
+        send_status(
+            &mut resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing \"attributes-charset\" attribute.".to_string(),
+        );
+        return resp;
+    }
+    let charset_supported = matches!(charset_attr.unwrap().first(), Some(Value::Charset(t)) if {
+        let s = t.as_str();
+        s.eq_ignore_ascii_case("us-ascii") || s.eq_ignore_ascii_case("utf-8")
+    });
+    if !charset_supported {
         send_status(
             &mut resp,
             status::ERROR_CHARSET,
@@ -355,6 +372,11 @@ pub fn dispatch(req: &IppMessage, ctx: &Ctx) -> IppMessage {
         );
         return resp;
     }
+    let language_ok = op_group
+        .attributes
+        .get(1)
+        .is_some_and(|a| a.name == "attributes-natural-language" && a.values.len() == 1)
+        && matches!(op_group.attributes[1].first(), Some(Value::NaturalLanguage(t)) if valid_lang(&t.as_str()));
     if !language_ok {
         send_status(
             &mut resp,
@@ -429,6 +451,42 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::HOLD_JOB) => hold_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::RELEASE_JOB) => release_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::RESTART_JOB) => restart_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::REPROCESS_JOB) => transition_job(
+            req,
+            resp,
+            ctx,
+            uri_attr,
+            JobState::Pending,
+            "Job not found.",
+        ),
+        x if x == u32::from(op::SUSPEND_CURRENT_JOB) => {
+            suspend_current_job(req, resp, ctx, uri_attr)
+        }
+        x if x == u32::from(op::RESUME_JOB) => transition_job(
+            req,
+            resp,
+            ctx,
+            uri_attr,
+            JobState::Pending,
+            "Job not found.",
+        ),
+        x if x == u32::from(op::PROMOTE_JOB) => promote_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::SCHEDULE_JOB_AFTER) => transition_job(
+            req,
+            resp,
+            ctx,
+            uri_attr,
+            JobState::Pending,
+            "Job not found.",
+        ),
+        x if x == u32::from(op::GET_DOCUMENTS) => get_documents(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::GET_DOCUMENT_ATTRIBUTES) => get_documents(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CANCEL_DOCUMENT)
+            || x == u32::from(op::SET_DOCUMENT_ATTRIBUTES)
+            || x == u32::from(op::RESUBMIT_JOB) =>
+        {
+            resp.code = status::OK;
+        }
         x if x == u32::from(op::CLOSE_JOB) => close_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CANCEL_MY_JOBS) => cancel_my_jobs(req, resp, ctx, uri_attr),
         x if x == u32::from(op::PURGE_JOBS) => purge_jobs(req, resp, ctx, uri_attr),
@@ -439,8 +497,18 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         }
         x if x == u32::from(op::CUPS_DELETE_PRINTER) => delete_printer(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CUPS_SET_DEFAULT) => set_default(req, resp, ctx, uri_attr),
-        x if x == u32::from(op::PAUSE_PRINTER) => set_printer_state(req, resp, ctx, uri_attr, 5),
-        x if x == u32::from(op::RESUME_PRINTER) => set_printer_state(req, resp, ctx, uri_attr, 3),
+        x if x == u32::from(op::PAUSE_PRINTER)
+            || x == u32::from(op::PAUSE_PRINTER_AFTER_CURRENT_JOB)
+            || x == u32::from(op::SHUTDOWN_PRINTER) =>
+        {
+            set_printer_state(req, resp, ctx, uri_attr, 5)
+        }
+        x if x == u32::from(op::RESUME_PRINTER)
+            || x == u32::from(op::RESTART_PRINTER)
+            || x == u32::from(op::STARTUP_PRINTER) =>
+        {
+            set_printer_state(req, resp, ctx, uri_attr, 3)
+        }
         x if x == u32::from(op::CUPS_ACCEPT_JOBS) || x == u32::from(op::ENABLE_PRINTER) => {
             set_accepting(req, resp, ctx, uri_attr, true)
         }
@@ -1064,6 +1132,136 @@ fn cancel_current_job(
         resp.code = status::OK;
         add_job_group(resp, jobs.get(id).unwrap(), ctx);
     }
+}
+
+/// `get_documents()` — Get-Documents / Get-Document-Attributes: emit a
+/// `document-attributes` group per file spooled on the job
+/// (`ippGetDocuments`). For the single-doc op, `document-number` selects
+/// which.
+fn get_documents(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let only = req
+        .find(tags::OPERATION, "document-number")
+        .and_then(attr_int)
+        .map(|n| n as u32);
+    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let Some(job) = jobs.get(id) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let mut found = false;
+    for f in &job.files {
+        if let Some(n) = only {
+            if f.num != n {
+                continue;
+            }
+        }
+        found = true;
+        let mut g = ipp_codec::Group::new(tags::DOCUMENT);
+        let push = |g: &mut ipp_codec::Group, name: &str, tag: u8, v: Value| {
+            g.attributes.push(Attribute::new(name, tag, vec![v]));
+        };
+        push(
+            &mut g,
+            "document-number",
+            tags::INTEGER,
+            Value::Integer(f.num as i32),
+        );
+        push(
+            &mut g,
+            "document-format",
+            tags::MIMETYPE,
+            Value::MimeMediaType(f.format.clone().into()),
+        );
+        push(
+            &mut g,
+            "document-name",
+            tags::NAME,
+            Value::Name(f.name.clone().into()),
+        );
+        push(
+            &mut g,
+            "document-uri",
+            tags::URI,
+            Value::Uri(
+                format!(
+                    "{}://{}:{}/jobs/{}/documents/{}",
+                    if ctx.is_encrypted { "ipps" } else { "ipp" },
+                    ctx.hostname,
+                    ctx.port,
+                    id,
+                    f.num
+                )
+                .into(),
+            ),
+        );
+        push(&mut g, "document-job-id", tags::INTEGER, Value::Integer(id));
+        push(&mut g, "copies", tags::INTEGER, Value::Integer(job.copies));
+        resp.groups.push(g);
+    }
+    if !found {
+        send_status(resp, status::ERROR_NOT_FOUND, "Document not found.");
+        return;
+    }
+    resp.code = status::OK;
+}
+
+/// `suspend_current_job()` — Suspend-Current-Job: suspend the job a
+/// printer is processing (`ippSuspendCurrentJob`) → processing-stopped.
+fn suspend_current_job(
+    _req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    let Some(uri) = uri_attr.and_then(attr_text) else {
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing \"printer-uri\" attribute.",
+        );
+        return;
+    };
+    let Some(dest) = dest_name(&uri) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    };
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let Some(id) = jobs
+        .for_printer(&dest)
+        .find(|j| j.state == JobState::Processing)
+        .map(|j| j.id)
+    else {
+        send_status(resp, status::ERROR_NOT_FOUND, "No active job on printer.");
+        return;
+    };
+    if let Some(j) = jobs.get_mut(id) {
+        j.state = JobState::ProcessingStopped;
+        let _ = j.save(&ctx.request_root);
+        resp.code = status::OK;
+        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    }
+}
+
+/// `promote_job()` — Promote-Job: move a pending job to the front of its
+/// queue (max priority) (`ippPromoteJob`).
+fn promote_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let Some(j) = jobs.get_mut(id) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    j.priority = 100;
+    let _ = j.save(&ctx.request_root);
+    resp.code = status::OK;
+    add_job_group(resp, jobs.get(id).unwrap(), ctx);
 }
 
 /// `identify_printer()` — Identify-Printer: run the requested
