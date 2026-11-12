@@ -198,6 +198,7 @@ impl<'a> Ctx<'a> {
             i32::from(op::CUPS_GET_DEFAULT),
             i32::from(op::CUPS_GET_PRINTERS),
             i32::from(op::CUPS_ADD_MODIFY_PRINTER),
+            i32::from(op::CUPS_CREATE_LOCAL_PRINTER),
             i32::from(op::CUPS_DELETE_PRINTER),
             i32::from(op::CUPS_GET_CLASSES),
             i32::from(op::CUPS_ADD_MODIFY_CLASS),
@@ -496,6 +497,9 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
             add_modify_printer(req, resp, ctx, uri_attr)
         }
         x if x == u32::from(op::CUPS_DELETE_PRINTER) => delete_printer(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CUPS_CREATE_LOCAL_PRINTER) => {
+            create_local_printer(req, resp, ctx)
+        }
         x if x == u32::from(op::CUPS_SET_DEFAULT) => set_default(req, resp, ctx, uri_attr),
         x if x == u32::from(op::PAUSE_PRINTER)
             || x == u32::from(op::PAUSE_PRINTER_AFTER_CURRENT_JOB)
@@ -1779,6 +1783,7 @@ fn authorize(ctx: &Ctx, resp: &mut IppMessage, op: u32) -> bool {
     let subj = authz::Subject {
         user,
         groups: &ctx.user_groups,
+        system_groups: &ctx.system_groups,
         addr: ctx.client_addr,
         host: &ctx.hostname,
         encrypted: ctx.is_encrypted,
@@ -1914,6 +1919,97 @@ fn add_modify_printer(
         }
     }
     resp.code = status::OK;
+}
+
+/// `create_local_printer()` — `CUPS-Create-Local-Printer` (0x4028). The
+/// IPP-based "add a printer" flow: the client sends `printer-name` and
+/// `device-uri` in a `printer-attributes` group (no queue URI needed).
+/// Driverless-first: the queue is created accepting+idle and the printer's
+/// description attributes are returned.
+fn create_local_printer(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
+    if !authorize(ctx, resp, u32::from(op::CUPS_ADD_MODIFY_PRINTER)) {
+        return;
+    }
+    let pg = req.groups.iter().find(|g| g.tag == tags::PRINTER);
+    let attr = |n: &str| -> Option<&Attribute> {
+        pg.and_then(|g| g.find(n))
+            .or_else(|| req.find(tags::OPERATION, n))
+    };
+    let Some(name) = attr("printer-name").and_then(attr_text) else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Missing printer-name.");
+        return;
+    };
+    if name.is_empty() || name.chars().any(|c| c.is_whitespace() || "/#?".contains(c)) {
+        send_status(resp, status::ERROR_BAD_REQUEST, "Bad printer-name.");
+        return;
+    }
+    let device_uri = attr("device-uri")
+        .and_then(attr_text)
+        .unwrap_or_else(|| "file:///dev/null".into());
+    let mut p = Printer::new(name.clone(), device_uri);
+    if let Some(v) = attr("printer-info").and_then(attr_text) {
+        p.info = Some(v);
+    }
+    if let Some(v) = attr("printer-location").and_then(attr_text) {
+        p.location = Some(v);
+    }
+    if let Some(v) = attr("printer-geo-location").and_then(attr_text) {
+        p.geo_location = Some(v);
+    }
+    if let Some(v) = attr("printer-make-and-model").and_then(attr_text) {
+        p.make_model = Some(v);
+    }
+    if let Some(a) = attr("printer-is-accepting-jobs") {
+        if let Some(Value::Boolean(b)) = a.values.first() {
+            p.accepting = *b;
+        }
+    } else {
+        p.accepting = true;
+    }
+    p.state = 3; // idle
+    p.state_time = printer::now();
+    p.config_time = printer::now();
+    ctx.reg_write().add(p);
+    save_printers(ctx);
+    ctx.event(
+        events::Event::PrinterAdded,
+        Some(&name),
+        None,
+        format!("Printer {name} added."),
+    );
+    if let Some(p) = ctx.reg().find(&name).cloned() {
+        if p.shared {
+            ctx.dnssd_publish(&p);
+        }
+    }
+    resp.code = status::OK;
+    // Echo the queue's description attrs the way upstream does for the
+    // "local printer created" response.
+    let g = resp.group_mut(tags::PRINTER);
+    let mut add = |n: &str, tag: u8, v: Value| {
+        g.attributes.push(Attribute::new(n, tag, vec![v]));
+    };
+    if let Some(p) = ctx.reg().find(&name) {
+        add(
+            "printer-is-accepting-jobs",
+            tags::BOOLEAN,
+            Value::Boolean(p.accepting),
+        );
+        add("printer-state", tags::ENUM, Value::Enum(p.state));
+        add(
+            "printer-state-reasons",
+            tags::KEYWORD,
+            Value::Keyword("none".into()),
+        );
+        let scheme = if ctx.is_encrypted { "ipps" } else { "ipp" };
+        add(
+            "printer-uri-supported",
+            tags::URI,
+            Value::Uri(
+                format!("{scheme}://{}:{}/printers/{}", ctx.hostname, ctx.port, p.name).into(),
+            ),
+        );
+    }
 }
 
 /// `delete_printer()` — `CUPS-Delete-Printer` (0x4004).

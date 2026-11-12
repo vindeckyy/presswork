@@ -516,6 +516,7 @@ async fn accept_tcp(
                         client_addr,
                         tls,
                         ssl_first_byte,
+                        None,
                     )
                     .await;
                 });
@@ -545,6 +546,14 @@ async fn accept_unix(
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
+                // `SO_PEERCRED` (upstream `cupsdAuthorize` PeerCred path) —
+                // the kernel-verified uid gives the connecting user's real
+                // name + groups, so local clients authenticate without a
+                // password (and cannot claim a different user).
+                use std::os::fd::AsRawFd;
+                let peer_auth = sys::peer_cred(stream.as_raw_fd()).and_then(|(_, uid, _)| {
+                    sys::name_of_uid(uid).map(|u| (u.clone(), sys::groups_of(&u)))
+                });
                 let opts = opts.clone();
                 let doc_root = doc_root.clone();
                 let registry = registry.clone();
@@ -575,6 +584,7 @@ async fn accept_unix(
                         std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                         tls,
                         false,
+                        peer_auth,
                     )
                     .await;
                 });
@@ -605,6 +615,7 @@ async fn serve_one<S>(
     client_addr: std::net::IpAddr,
     tls: Option<Arc<tokio_rustls::TlsAcceptor>>,
     ssl_first_byte: bool,
+    peer_auth: Option<(String, Vec<String>)>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -632,6 +643,7 @@ async fn serve_one<S>(
                         dnssd_state: &dnssd_state,
                         server_root: server_root.as_path(),
                         client_addr,
+                        peer: &peer_auth,
                     },
                 )
                 .await;
@@ -660,6 +672,7 @@ async fn serve_one<S>(
                 &server_root,
                 client_addr,
                 false,
+                &peer_auth,
             );
             if req.wants_tls_upgrade && tls.is_some() {
                 upgraded.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -690,6 +703,7 @@ async fn serve_one<S>(
                         dnssd_state: &dnssd_state,
                         server_root: server_root.as_path(),
                         client_addr,
+                        peer: &peer_auth,
                     },
                 )
                 .await;
@@ -713,6 +727,7 @@ struct ConnArgs<'a> {
     dnssd_state: &'a Arc<std::sync::RwLock<Option<dnssd::Advertiser>>>,
     server_root: &'a Path,
     client_addr: std::net::IpAddr,
+    peer: &'a Option<(String, Vec<String>)>,
 }
 
 /// `serve_connection` bound to a dispatch_req closure.
@@ -741,6 +756,7 @@ async fn serve_conn<S>(
             a.server_root,
             a.client_addr,
             encrypted,
+            a.peer,
         )
     })
     .await;
@@ -780,6 +796,7 @@ fn dispatch_req(
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
     encrypted: bool,
+    peer: &Option<(String, Vec<String>)>,
 ) -> Response {
     let server_bin =
         std::path::Path::new(cfg.files.server_bin.as_deref().unwrap_or("/usr/lib/cups"));
@@ -818,6 +835,7 @@ fn dispatch_req(
                 server_root,
                 client_addr,
                 encrypted,
+                peer,
             )
         }
         Method::Options if req.wants_tls_upgrade => Response::status(StatusCode::UPGRADE_REQUIRED),
@@ -919,6 +937,7 @@ fn ipp_dispatch(
     server_root: &std::path::Path,
     client_addr: std::net::IpAddr,
     encrypted: bool,
+    peer: &Option<(String, Vec<String>)>,
 ) -> Response {
     let Ok((msg, consumed)) = ipp_codec::decode(req.body.as_bytes()) else {
         log_access(&**log, host, req, 400, 0, "-", "-");
@@ -952,6 +971,15 @@ fn ipp_dispatch(
                 ctx.user_groups = groups;
                 ctx.username = Some(user);
             }
+        }
+    }
+    // `SO_PEERCRED` fallback (unix socket only): when no credentials were
+    // supplied, authenticate as the kernel-verified peer user — upstream
+    // `cupsdAuthorize` PeerCred semantics for local clients.
+    if ctx.username.is_none() {
+        if let Some((user, groups)) = peer {
+            ctx.user_groups = groups.clone();
+            ctx.username = Some(user.clone());
         }
     }
     let resp = ops::dispatch(&msg, &ctx);

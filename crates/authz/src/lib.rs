@@ -16,6 +16,8 @@ pub struct Subject<'a> {
     pub user: Option<&'a str>,
     /// Unix group names the user belongs to.
     pub groups: &'a [String],
+    /// Configured `SystemGroup` names — the `@SYSTEM` expansion.
+    pub system_groups: &'a [String],
     /// Client address.
     pub addr: IpAddr,
     /// Client hostname (for name-based masks).
@@ -82,8 +84,14 @@ fn require_check(loc: &Location, s: &Subject) -> bool {
     for n in &loc.names {
         match n.as_str() {
             // valid-user: any authenticated user.
-            "valid-user" | "@SYSTEM" if user == "@SYSTEM" => {}
             "valid-user" => return true,
+            // @SYSTEM expands to the configured `SystemGroup` names — the
+            // user must belong to at least one of them.
+            "@SYSTEM" => {
+                if s.groups.iter().any(|g| s.system_groups.contains(g)) {
+                    return true;
+                }
+            }
             "@OWNER" => continue, // owner check is per-resource, handled by caller
             g if g.starts_with('@') => {
                 // @group → membership
@@ -97,11 +105,6 @@ fn require_check(loc: &Location, s: &Subject) -> bool {
         if n == &user {
             return true;
         }
-    }
-    // @SYSTEM expands to the configured SystemGroup — the caller maps it.
-    if loc.names.iter().any(|n| n == "@SYSTEM") && s.groups.iter().any(|g| g == "lp" || g == "root")
-    {
-        return true;
     }
     false
 }

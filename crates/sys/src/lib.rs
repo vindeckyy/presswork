@@ -188,6 +188,32 @@ pub fn sd_listen_fds() -> Vec<std::os::fd::OwnedFd> {
     out
 }
 
+/// `SO_PEERCRED` on an `AF_UNIX` stream socket — the `(pid, uid, gid)` of
+/// the connected peer, the `cupsdAuthorize`/`PeerCred` path that lets local
+/// clients authenticate as their real user without a password.
+/// Returns `None` when the socket is not `AF_UNIX` or the getsockopt fails.
+#[cfg(unix)]
+#[must_use]
+pub fn peer_cred(fd: std::os::fd::RawFd) -> Option<(i32, u32, u32)> {
+    let mut uc: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `uc`/`len` are valid out-params; `fd` is an open socket.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut uc as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if rc == 0 {
+        Some((uc.pid, uc.uid, uc.gid))
+    } else {
+        None
+    }
+}
+
 /// `getsockname(2)` `sa_family` for an fd — `AF_UNIX` vs `AF_INET`/`INET6`.
 /// Returns the family constant, or `-1` on error.
 #[cfg(unix)]
