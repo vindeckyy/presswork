@@ -87,6 +87,8 @@ pub struct Job {
     pub attrs: Vec<Attribute>,
     pub files: Vec<JobFile>,
     pub created_at: i64,
+    /// When the job entered `Processing` (`time-at-processing`).
+    pub processing_at: Option<i64>,
     pub completed_at: Option<i64>,
     /// Running filter-pipeline backend pid, if any.
     pub backend_pid: Option<i32>,
@@ -108,6 +110,7 @@ impl Job {
             attrs: Vec::new(),
             files: Vec::new(),
             created_at: now(),
+            processing_at: None,
             completed_at: None,
             backend_pid: None,
             copies: 1,
@@ -186,6 +189,14 @@ impl Job {
             tags::INTEGER,
             Value::Integer(self.created_at as i32),
         );
+        if let Some(t) = self.processing_at {
+            upsert(
+                &mut msg,
+                "time-at-processing",
+                tags::INTEGER,
+                Value::Integer(t as i32),
+            );
+        }
         if let Some(t) = self.completed_at {
             upsert(
                 &mut msg,
@@ -270,6 +281,7 @@ impl Job {
                 .unwrap_or_default(),
             files,
             created_at: i64::from(get_i("time-at-creation").unwrap_or_else(|| now() as i32)),
+            processing_at: get_i("time-at-processing").map(i64::from),
             completed_at: get_i("time-at-completed").map(i64::from),
             backend_pid: None,
             copies: get_i("copies").unwrap_or(1),

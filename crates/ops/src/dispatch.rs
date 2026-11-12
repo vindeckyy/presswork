@@ -159,10 +159,13 @@ impl<'a> Ctx<'a> {
     ) -> Self {
         let mut ops: Vec<i32> = vec![
             i32::from(op::PRINT_JOB),
+            i32::from(op::PRINT_URI),
             i32::from(op::VALIDATE_JOB),
             i32::from(op::CREATE_JOB),
             i32::from(op::SEND_DOCUMENT),
             i32::from(op::CANCEL_JOB),
+            i32::from(op::CANCEL_CURRENT_JOB),
+            i32::from(op::IDENTIFY_PRINTER),
             i32::from(op::GET_JOB_ATTRIBUTES),
             i32::from(op::GET_JOBS),
             i32::from(op::GET_PRINTER_ATTRIBUTES),
@@ -416,9 +419,13 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
         x if x == u32::from(op::VALIDATE_JOB) => validate_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::GET_JOBS) => get_jobs(req, resp, ctx, uri_attr),
         x if x == u32::from(op::PRINT_JOB) => print_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::PRINT_URI) => print_uri(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CREATE_JOB) => create_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::SEND_DOCUMENT) => send_document(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CANCEL_JOB) => cancel_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CANCEL_CURRENT_JOB) => cancel_current_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::IDENTIFY_PRINTER) => identify_printer(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CUPS_GET_DOCUMENT) => get_document(req, resp, ctx, uri_attr),
         x if x == u32::from(op::HOLD_JOB) => hold_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::RELEASE_JOB) => release_job(req, resp, ctx, uri_attr),
         x if x == u32::from(op::RESTART_JOB) => restart_job(req, resp, ctx, uri_attr),
@@ -699,8 +706,18 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         .find(tags::OPERATION, "which-jobs")
         .and_then(attr_text)
         .unwrap_or_else(|| "not-completed".into());
+    let limit = req
+        .find(tags::OPERATION, "limit")
+        .and_then(attr_int)
+        .filter(|l| *l > 0)
+        .map(|l| l as usize)
+        .unwrap_or(usize::MAX);
     let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let mut emitted = 0;
     for j in jobs.for_printer(&p.name) {
+        if emitted >= limit {
+            break;
+        }
         let done = j.state.is_final();
         let emit = match which.as_str() {
             "completed" => done,
@@ -709,6 +726,7 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
         };
         if emit {
             add_job_group(resp, j, ctx);
+            emitted += 1;
         }
     }
     resp.code = status::OK;
@@ -758,6 +776,56 @@ fn valid_lang(s: &str) -> bool {
 /// Validates dest, spools `ctx.document` to `d%05d-001`, creates the job
 /// pending, and returns the job group.
 fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let doc = ctx.document.to_vec();
+    let name = ctx.document_name.clone();
+    submit_document(req, resp, ctx, uri_attr, doc, name);
+}
+
+/// `print_uri()` — like Print-Job but the document comes from
+/// `document-uri` rather than the request body (`ippPrintURI`). We
+/// resolve `file://` URIs to a local path read; network schemes need a
+/// fetcher upstream plugs in — unsupported here.
+fn print_uri(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(doc_uri) = req
+        .find(tags::OPERATION, "document-uri")
+        .and_then(attr_text)
+    else {
+        send_status(resp, status::ERROR_BAD_REQUEST, "missing document-uri");
+        return;
+    };
+    let (doc, name) = if let Some(path) = doc_uri
+        .strip_prefix("file://localhost")
+        .or_else(|| doc_uri.strip_prefix("file://"))
+    {
+        match std::fs::read(path) {
+            Ok(d) => {
+                let n = path.rsplit('/').next().unwrap_or(path).to_string();
+                (d, n)
+            }
+            Err(e) => {
+                send_status(resp, status::ERROR_NOT_FOUND, &format!("document-uri: {e}"));
+                return;
+            }
+        }
+    } else {
+        send_status(
+            resp,
+            status::ERROR_URI_SCHEME,
+            "document-uri scheme not supported",
+        );
+        return;
+    };
+    submit_document(req, resp, ctx, uri_attr, doc, name);
+}
+
+fn submit_document(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+    document: Vec<u8>,
+    document_name: String,
+) {
     let Some((dest, _)) = validate_accepting(ctx, resp, uri_attr) else {
         return;
     };
@@ -772,7 +840,7 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
             req.find(tags::OPERATION, "document-name")
                 .and_then(attr_text)
         })
-        .unwrap_or_else(|| ctx.document_name.clone());
+        .unwrap_or_else(|| document_name.clone());
     let user = ctx
         .requesting_user
         .clone()
@@ -801,7 +869,7 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
 
     // Spool the document.
     let data = job::Job::data_path(&ctx.request_root, id, 1);
-    if let Err(e) = std::fs::write(&data, ctx.document) {
+    if let Err(e) = std::fs::write(&data, &document) {
         send_status(resp, status::ERROR_INTERNAL, &format!("spool write: {e}"));
         return;
     }
@@ -809,8 +877,8 @@ fn print_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Optio
     job.files.push(job::JobFile {
         num: 1,
         filetype,
-        size: ctx.document.len() as u64,
-        name: ctx.document_name.clone(),
+        size: document.len() as u64,
+        name: document_name,
         format,
     });
     if jobs.add(&ctx.request_root, job).is_err() {
@@ -953,6 +1021,151 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
     }
     resp.code = status::OK;
     add_job_group(resp, jobs.get(id).unwrap(), ctx);
+}
+
+/// `cancel_current_job()` — Cancel-Current-Job: cancel the job a printer
+/// is processing right now (`ippCancelCurrentJob`).
+fn cancel_current_job(
+    _req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    let Some(uri) = uri_attr.and_then(attr_text) else {
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing \"printer-uri\" attribute.",
+        );
+        return;
+    };
+    let Some(dest) = dest_name(&uri) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    };
+    let mut jobs = ctx.jobs.write().unwrap_or_else(|e| e.into_inner());
+    let Some(id) = jobs
+        .for_printer(&dest)
+        .find(|j| j.state == JobState::Processing)
+        .map(|j| j.id)
+    else {
+        send_status(resp, status::ERROR_NOT_FOUND, "No active job on printer.");
+        return;
+    };
+    if let Some(j) = jobs.get_mut(id) {
+        j.state = JobState::Canceled;
+        j.completed_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        );
+        let _ = j.save(&ctx.request_root);
+        resp.code = status::OK;
+        add_job_group(resp, jobs.get(id).unwrap(), ctx);
+    }
+}
+
+/// `identify_printer()` — Identify-Printer: run the requested
+/// `identify-actions` (display/flash/sound/speak) to locate a device.
+/// Driverless-first: there is no hardware to flash, so we validate the
+/// queue, record the action in the access log via an event, and ACK
+/// (`ippIdentifyPrinter`).
+fn identify_printer(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    uri_attr: Option<&Attribute>,
+) {
+    let Some(uri) = uri_attr.and_then(attr_text) else {
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing \"printer-uri\" attribute.",
+        );
+        return;
+    };
+    let reg = ctx.reg();
+    let Some((p, _)) = reg.validate_dest(&uri) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "The printer does not exist.");
+        return;
+    };
+    let actions = req
+        .find(tags::OPERATION, "identify-actions")
+        .map(|a| {
+            a.values
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Keyword(k) => Some(k.as_str().as_ref().to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_else(|| "display".into());
+    let name = p.name.clone();
+    drop(reg);
+    ctx.event(
+        events::Event::PrinterStateChanged,
+        Some(&name),
+        None,
+        format!("Identify-Printer: actions={actions}"),
+    );
+    resp.code = status::OK;
+}
+
+/// `get_document()` — CUPS-Get-Document: return a job's spooled document
+/// (`cupsGetDocument`). Reads `d%05d-00N` into the response payload.
+fn get_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(id) = job_id(req, uri_attr) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    let num = req
+        .find(tags::OPERATION, "document-number")
+        .and_then(attr_int)
+        .unwrap_or(1)
+        .max(1) as u32;
+    let jobs = ctx.jobs.read().unwrap_or_else(|e| e.into_inner());
+    let Some(job) = jobs.get(id) else {
+        send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+        return;
+    };
+    if num as usize > job.files.len() {
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "Document number does not exist.",
+        );
+        return;
+    }
+    let path = job::Job::data_path(&ctx.request_root, id, num);
+    match std::fs::read(&path) {
+        Ok(bytes) => {
+            resp.document = bytes;
+            resp.code = status::OK;
+            // document-format in the operation group so clients know the type.
+            let fmt = job
+                .files
+                .get((num - 1) as usize)
+                .map(|f| f.format.clone())
+                .unwrap_or_else(|| "application/octet-stream".into());
+            let g = resp.group_mut(tags::OPERATION);
+            g.attributes.push(Attribute::new(
+                "document-format",
+                tags::MIMETYPE,
+                vec![Value::MimeMediaType(fmt.into())],
+            ));
+            add_job_group(resp, job, ctx);
+        }
+        Err(e) => {
+            send_status(
+                resp,
+                status::ERROR_NOT_FOUND,
+                &format!("Cannot open document: {e}"),
+            );
+        }
+    }
 }
 
 /// Shared body for single-job state transitions (Hold/Release/Restart).
@@ -1241,6 +1454,13 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx) {
         tags::INTEGER,
         Value::Integer(job.created_at as i32),
     );
+    if let Some(t) = job.processing_at {
+        add(
+            "time-at-processing",
+            tags::INTEGER,
+            Value::Integer(t as i32),
+        );
+    }
     if let Some(t) = job.completed_at {
         add("time-at-completed", tags::INTEGER, Value::Integer(t as i32));
     }
@@ -1250,7 +1470,7 @@ fn add_job_group(resp: &mut IppMessage, job: &Job, ctx: &Ctx) {
 /// `device-class/device-uri/device-make-and-model/device-info/device-id`
 /// (`CUPS-Get-Devices`, P3).
 fn get_devices(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
-    let deviced = ctx.server_bin.join("cups-deviced");
+    let deviced = ctx.server_bin.join("daemon").join("cups-deviced");
     let backend_dir = ctx.server_bin.join("backend");
     let out = std::process::Command::new(&deviced)
         .args(["0", "0", "15", &backend_dir.to_string_lossy()])

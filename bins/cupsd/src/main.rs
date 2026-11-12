@@ -1057,6 +1057,12 @@ fn schedule_tick(
                 .get_mut(job_id)
             {
                 j.state = job::JobState::Processing;
+                j.processing_at = Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0),
+                );
                 j.backend_pid = Some(pipe.backend.id() as i32);
                 let _ = j.save(&request_root);
             }

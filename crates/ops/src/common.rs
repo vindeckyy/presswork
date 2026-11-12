@@ -462,7 +462,7 @@ fn addn(v: &mut Vec<Attribute>, name: &str, tag: u8, vals: Vec<Value>) {
 /// `printer->attrs` — the stored attribute set `cupsdSetPrinterAttrs`
 /// builds for a queue. Driverless-first: this is the raw/basic set;
 /// PPD-derived attrs join at P7.
-fn stored_attrs(p: &Printer, ctx: &Ctx) -> Vec<Attribute> {
+fn stored_attrs(p: &Printer, _ctx: &Ctx) -> Vec<Attribute> {
     let mut v: Vec<Attribute> = Vec::with_capacity(64);
     let kw = |s: &str| Value::Keyword(s.into());
 

@@ -278,6 +278,9 @@ pub struct IppMessage {
     pub code: u16,
     pub request_id: i32,
     pub groups: Vec<Group>,
+    /// Document payload appended after the attribute groups on the wire
+    /// (`Send-Document` requests, `Get-Document`/`Get-Presets` responses).
+    pub document: Vec<u8>,
 }
 
 impl IppMessage {
@@ -288,6 +291,7 @@ impl IppMessage {
             code,
             request_id: 1,
             groups: Vec::new(),
+            document: Vec::new(),
         }
     }
 

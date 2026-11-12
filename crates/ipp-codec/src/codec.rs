@@ -48,15 +48,15 @@ pub fn decode(buf: &[u8]) -> Result<(IppMessage, usize), CodecError> {
             code: d.code,
             request_id: d.request_id,
             groups,
+            document: Vec::new(),
         },
         d.pos,
     ))
 }
 
-/// Encode `msg` into its wire form (header + attributes + `0x03`).
-///
-/// Document data is not part of the IPP message; callers append it after
-/// the encoded message or stream it separately.
+/// Encode `msg` into its wire form (header + attributes + `0x03`), then
+/// append `msg.document` — the payload `Get-Document`/`Send-Document`
+/// carry after the attribute groups.
 pub fn encode(msg: &IppMessage) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::with_capacity(512);
     out.push(msg.version.0);
@@ -67,6 +67,7 @@ pub fn encode(msg: &IppMessage) -> Result<Vec<u8>, CodecError> {
         encode_group(group, &mut out)?;
     }
     out.push(tags::END);
+    out.extend_from_slice(&msg.document);
     Ok(out)
 }
 
