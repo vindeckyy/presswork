@@ -100,7 +100,6 @@ const JOB_ATTRS: &[&str] = &[
     "media",
     "media-col",
     "multiple-document-handling",
-    "multiple-operation-time-out",
     "number-up",
     "orientation-requested",
     "output-bin",
@@ -141,17 +140,24 @@ fn is_job_template(name: &str) -> bool {
 /// The list may name individual attributes *or* an attribute group:
 /// `all` (everything), `printer-description` (non-template attrs),
 /// `job-template` (job-template attrs), `printer-defaults`, …
+/// When `requested-attributes` is absent (`ra` is `None`), or when it
+/// only names a *group* (`all`, `job-template`, …), the huge opt-in
+/// media database collections are still withheld — they are emitted only
+/// when named literally, matching upstream.
 pub fn wants(ra: &Option<Vec<String>>, name: &str) -> bool {
-    ra.as_ref().is_none_or(|ra| {
-        ra.iter().any(|n| {
+    let opt_in_only = matches!(name, "media-col-database" | "media-size-database");
+    match ra {
+        None => !opt_in_only,
+        Some(ra) => ra.iter().any(|n| {
             n == name
-                || n == "all"
-                || (n == "job-template" && is_job_template(name))
-                || (n == "printer-description" && !is_job_template(name))
-                || (n == "printer-defaults" && name.ends_with("-default"))
-                || (n == "document-format" && name.starts_with("document-format"))
-        })
-    })
+                || (!opt_in_only
+                    && (n == "all"
+                        || (n == "job-template" && is_job_template(name))
+                        || (n == "printer-description" && !is_job_template(name))
+                        || (n == "printer-defaults" && name.ends_with("-default"))
+                        || (n == "document-format" && name.starts_with("document-format"))))
+        }),
+    }
 }
 
 /// URI assembly mirroring `httpAssembleURIf` for queue URIs:
