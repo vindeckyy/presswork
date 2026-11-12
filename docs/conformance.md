@@ -55,15 +55,26 @@ can administer queues, matching real CUPS.
 | `get-notifications` | passes with `-d id=<subscription-id>` (pull delivery verified) |
 | `get-printers-printer-id` | passes with `-d printer_id=<id>` |
 
-## P7 in progress — PPD / legacy-driver parity
+## P7 — PPD / legacy-driver parity
 
-`CUPS-Get-PPDs`/`CUPS-Get-PPD` are implemented via a `cups-driverd`
-helper under `ServerBin/daemon/` (the `cups-deviced` analogue). The
-driver database ships the IPP Everywhere model plus `.ppd` files scanned
-from the configured PPD dir; `get-ppd*`/`get-ppds*` tests pass 6/6.
-Remaining: `.drv` driver-database files, `CUPS-Create-Local-Printer`
-driver selection (`ppd-name`/`device-id`→driver mapping), and full
-legacy PPD-based job processing.
+`CUPS-Get-PPDs`/`CUPS-Get-PPD` run a `cups-driverd` helper under
+`ServerBin/daemon/` (the `cups-deviced` analogue). Driver sources: the
+built-in IPP Everywhere model, `.drv` driver-database files (parsed for
+`ModelName`/`PCFileName`/capability blocks → `drv://` entries, compiled
+to PPDs on `cat`), and `.ppd` files under the PPD dir. All 9 upstream
+`get-ppd*`/`get-ppds*` tests pass.
+
+`CUPS-Create-Local-Printer` driver selection: `ppd-name`/
+`printer-device-id`/`device-id`/`ppd-make` are stored on the queue
+(`printers.conf` `Option` lines), so `Get-PPD` resolves `printer-uri` to
+the bound driver's compiled PPD and `Get-Printer-Attributes` emits the
+stored `printer-device-id`.
+
+PPD-based job processing: the scheduler reads the queue's PPD
+`*cupsFilter`/`*cupsFilter2` declarations to pick the conversion target
+MIME and appends a non-`-` `program` as the final driver-filter stage —
+verified end-to-end (a `.drv`-bound queue ran `rastertofoo` before the
+backend).
 
 ## Known engineering notes
 
