@@ -101,7 +101,30 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     backend_common::run(
         || {
-            // Discovery mode — the ipp backend doesn't enumerate devices.
+            // Discovery — the ipp backend doesn't enumerate devices but
+            // lists its schemes, matching upstream `lpinfo -v` output.
+            backend_common::report(
+                "network",
+                "ipp",
+                "Unknown",
+                "Internet Printing Protocol (ipp)",
+                None,
+            );
+            backend_common::report(
+                "network",
+                "ipps",
+                "Unknown",
+                "Internet Printing Protocol (ipps)",
+                None,
+            );
+            backend_common::report("network", "http", "Unknown", "World Wide Web (http)", None);
+            backend_common::report(
+                "network",
+                "https",
+                "Unknown",
+                "World Wide Web (https)",
+                None,
+            );
             backend_common::code::OK
         },
         |inv| print(&args, &inv),

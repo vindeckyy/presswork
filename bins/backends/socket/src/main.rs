@@ -12,7 +12,15 @@ use std::time::Duration;
 fn main() {
     bc::run(
         || {
-            // socket has no auto-discoverable devices.
+            // socket has no auto-discoverable devices but, like upstream,
+            // still lists its scheme for `lpinfo -v`.
+            bc::report(
+                "network",
+                "socket",
+                "Unknown",
+                "AppSocket/HP JetDirect",
+                None,
+            );
             bc::code::OK
         },
         |inv| {

@@ -37,7 +37,9 @@ fn read_ack(s: &mut TcpStream) -> std::io::Result<()> {
 fn main() {
     backend_common::run(
         || {
-            // Discovery — lpd doesn't enumerate remote queues.
+            // Discovery — lpd doesn't enumerate remote queues but lists
+            // its scheme, matching upstream `lpinfo -v` output.
+            backend_common::report("network", "lpd", "Unknown", "LPD/LPR Host or Printer", None);
             backend_common::code::OK
         },
         |inv| {

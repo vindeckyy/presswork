@@ -513,6 +513,7 @@ fn run_op(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&
             resp.code = status::OK;
         }
         x if x == u32::from(op::CLOSE_JOB) => close_job(req, resp, ctx, uri_attr),
+        x if x == u32::from(op::CANCEL_JOBS) => cancel_jobs(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CANCEL_MY_JOBS) => cancel_my_jobs(req, resp, ctx, uri_attr),
         x if x == u32::from(op::PURGE_JOBS) => purge_jobs(req, resp, ctx, uri_attr),
         x if x == u32::from(op::CUPS_MOVE_JOB) => cups_move_job(req, resp, ctx, uri_attr),
@@ -1622,6 +1623,72 @@ fn cancel_my_jobs(
     resp.code = status::OK;
 }
 
+/// `Cancel-Jobs` — cancel every non-final job on the named destination
+/// (`cancel -a`, `cancel -a <printer>`); `my-jobs`/`requesting-user-name`
+/// scope it to one user's jobs like upstream `cancel_jobs`.
+fn cancel_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
+    let Some(uri) = uri_attr.and_then(attr_text) else {
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "Missing \"printer-uri\" attribute.",
+        );
+        return;
+    };
+    let all = is_all_printers_uri(&uri);
+    let dest = dest_name(&uri);
+    if !all && dest.is_none() {
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "The printer or class does not exist.",
+        );
+        return;
+    }
+    if !all && ctx.reg().validate_dest(&uri).is_none() {
+        send_status(
+            resp,
+            status::ERROR_NOT_FOUND,
+            "The printer or class does not exist.",
+        );
+        return;
+    }
+    let my_jobs = req
+        .find(tags::OPERATION, "my-jobs")
+        .and_then(|a| matches!(a.first(), Some(Value::Boolean(b)) if *b).then_some(()))
+        .is_some();
+    let user = ctx
+        .requesting_user
+        .clone()
+        .or_else(|| {
+            req.find(tags::OPERATION, "requesting-user-name")
+                .and_then(attr_text)
+        })
+        .unwrap_or_default();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let mut jobs = ctx
+        .jobs
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for j in jobs.values_mut() {
+        if j.state.is_final() {
+            continue;
+        }
+        if !all && j.dest != *dest.as_deref().unwrap_or("") {
+            continue;
+        }
+        if my_jobs && j.username != user {
+            continue;
+        }
+        j.state = JobState::Canceled;
+        j.completed_at = Some(now);
+        let _ = j.save(&ctx.request_root);
+    }
+    resp.code = status::OK;
+}
+
 /// `Purge-Jobs` — remove all jobs (admin op; upstream requires auth).
 fn purge_jobs(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, _uri_attr: Option<&Attribute>) {
     let mut jobs = ctx
@@ -1872,8 +1939,6 @@ fn get_devices(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         return;
     };
     resp.code = status::OK;
-    let g = resp.group_mut(tags::OPERATION);
-    let _ = g;
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         // `class uri "make-model" "info" ["device-id"]`
         let mut it = line.splitn(3, ' ');
@@ -1886,7 +1951,10 @@ fn get_devices(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             q.get(1).cloned().unwrap_or_default(),
             q.get(2).cloned().unwrap_or_default(),
         );
-        let g = resp.group_mut(tags::OPERATION);
+        let g = resp.group_mut(tags::PRINTER);
+        if !g.attributes.is_empty() {
+            g.attributes.push(Attribute::separator());
+        }
         g.attributes.push(Attribute::new(
             "device-class",
             tags::KEYWORD,
@@ -1907,13 +1975,12 @@ fn get_devices(_req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
             tags::TEXT,
             vec![Value::Text(info.into())],
         ));
-        if !devid.is_empty() {
-            g.attributes.push(Attribute::new(
-                "device-id",
-                tags::TEXT,
-                vec![Value::Text(devid.into())],
-            ));
-        }
+        // libcups cupsGetDevices requires device-id non-NULL (may be "").
+        g.attributes.push(Attribute::new(
+            "device-id",
+            tags::TEXT,
+            vec![Value::Text(devid.into())],
+        ));
     }
 }
 

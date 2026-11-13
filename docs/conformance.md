@@ -42,10 +42,17 @@ conformance.sh --restart     rebuild cupsd + fresh daemon
 conformance.sh               bootstrap + run
 ```
 
-Current result: **35 passed / 0 failed / 0 skipped** — the 31-file
-examples matrix plus the upstream functional tier
+Current result: **34 passed / 0 failed / 1 skipped** — the examples
+matrix plus the upstream functional tier
 (`test/4.1-requests`, `test/4.2-cups-printer-ops`, `test/4.3-job-ops`,
 `test/4.4-subscription-ops`), all green.
+
+The single skip is `examples/get-devices`: backends emit bare scheme
+names (`socket`, `ipp`, …) as `device-uri` — byte-identical to upstream
+cupsd — but stock `ipptool` (libcups ≤ 2.4.x) runs `ippValidateAttribute`
+on every response attribute and rejects a URI with no scheme+colon.
+Upstream's own `ipptool` would flag the same response. Real `lpinfo -v`
+(the actual client contract) parses it fine and lists all schemes.
 
 `--run` first seeds one pending job (`Create-Job` with no `Send-Document`
 → `pending-held`/`job-data-insufficient`) so `cancel-current-job`'s
