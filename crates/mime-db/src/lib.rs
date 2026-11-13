@@ -336,7 +336,9 @@ fn parse_rules(s: &str) -> (Expr, i32) {
                 }
                 k += 1;
             }
-            let (inner, _) = parse_rules(&s[pos + 1..k.saturating_sub(1)]);
+            // Truncated input can leave `k <= pos+1` (a `(` as the final
+            // byte) — `get` returns None for that inverted range.
+            let (inner, _) = parse_rules(s.get(pos + 1..k.saturating_sub(1)).unwrap_or(""));
             rule = Rule::Group { expr: inner };
             pos = k;
         } else {
@@ -364,6 +366,14 @@ fn parse_rules(s: &str) -> (Expr, i32) {
             } else {
                 pos = k.max(pos + 1);
                 skip_ws(buf, &mut pos);
+                continue;
+            }
+            // Guarantee forward progress even if a future caller lets an
+            // empty slice parse to Some — a rule that consumed no input
+            // must not be pushed.
+            if k == pos {
+                skip_ws(buf, &mut pos);
+                pos += usize::from(pos < buf.len());
                 continue;
             }
             pos = k;
@@ -397,7 +407,12 @@ fn parse_rules(s: &str) -> (Expr, i32) {
 }
 
 fn parse_rule(t: &str) -> Option<Rule> {
-    // `fn(a, b, "c")` or bare extension/match.
+    // `fn(a, b, "c")` or bare extension/match. Empty slices are unparseable —
+    // returning Some here would let `parse_rules` push a `*.` Match without
+    // advancing `pos`, looping until OOM on inputs like `…)`.
+    if t.is_empty() {
+        return None;
+    }
     if let Some(open) = t.find('(') {
         let name = &t[..open];
         let argstr = t[open + 1..].trim_end_matches(')');
@@ -572,8 +587,14 @@ fn eval_rule(r: &Rule, filename: &str, head: &[u8]) -> bool {
             .iter()
             .all(|c| matches!(c, b'\r' | b'\n' | b'\t' | 8 | 32..=126 | 128..=254)),
         Rule::Contains { offset, range, lit } => {
-            let win = get(head, *offset, *range + lit.len());
-            win.windows(lit.len()).any(|w| w == lit.as_slice())
+            // `windows(0)` panics — an empty literal matches at offset 0,
+            // like strstr(s, "").
+            if lit.is_empty() {
+                true
+            } else {
+                let win = get(head, *offset, *range + lit.len());
+                win.windows(lit.len()).any(|w| w == lit.as_slice())
+            }
         }
         Rule::Regex { offset, pat } => {
             // Upstream uses REG_EXTENDED on the first line. We support a

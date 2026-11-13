@@ -81,7 +81,8 @@ fn tls_config() -> Result<rustls::ClientConfig, String> {
                 let Ok(data) = std::fs::read(&p) else {
                     continue;
                 };
-                for c in rustls_pemfile::certs(&mut &data[..]).flatten() {
+                use rustls::pki_types::pem::PemObject;
+                for c in rustls::pki_types::CertificateDer::pem_slice_iter(&data).flatten() {
                     let _ = roots.add(c);
                 }
             }
