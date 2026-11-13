@@ -91,7 +91,7 @@ install: build
 	-[ -f packaging/pam/cups ] && install -m 0644 packaging/pam/cups $(DESTDIR)$(PAMDIR)/cups || true
 	# Docs.
 	install -d $(DESTDIR)$(DOCDIR)
-	install -m 0644 README.md PLAN.md docs/conformance.md docs/deviations.md \
+	install -m 0644 README.md docs/conformance.md docs/deviations.md \
 	    SECURITY.md CHANGELOG.md $(DESTDIR)$(DOCDIR)/ 2>/dev/null || true
 
 uninstall:
