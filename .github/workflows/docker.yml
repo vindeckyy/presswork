@@ -33,6 +33,8 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
+          flavor: |
+            latest=true
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
