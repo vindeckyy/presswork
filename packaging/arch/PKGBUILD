@@ -12,7 +12,7 @@ provides=('cups')
 conflicts=('cups')
 backup=('etc/cups/cupsd.conf' 'etc/cups/cups-files.conf' 'etc/cups/printers.conf')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/vindeckyy/yindle/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('74b49824bbfa2e2b417ee1caa6094743cba6fb7ffe0be71ba0e6ee3a1662121a')
+sha256sums=('7886e3e8b82faeb2fa31b1bc6f889bdfb8bd59efc571ab05c8419070c6136ac4')
 options=('!lto')   # workspace already sets its release profile
 
 prepare() {
