@@ -36,6 +36,7 @@ struct DrvModel {
     manufacturer: String,
     filters: Vec<String>, // "<mime> <cost> <cmd>"
     media_sizes: Vec<String>,
+    hw_margins: Option<[f64; 4]>, // points: left bottom right top
     resolutions: Vec<String>,
     color_models: Vec<String>,
     duplex: bool,
@@ -160,6 +161,20 @@ fn parse_drv(path: &Path, drv_root: &Path) -> Vec<DrvModel> {
                 }
                 pending_filters.push(rest.to_string());
             }
+            "HWMargins" => {
+                let nums: Vec<f64> = rest
+                    .split_whitespace()
+                    .filter_map(|t| t.parse().ok())
+                    .collect();
+                if nums.len() >= 4 {
+                    let m = [nums[0], nums[1], nums[2], nums[3]];
+                    if let Some(cm) = cur.as_mut() {
+                        cm.hw_margins = Some(m);
+                    } else {
+                        shared.hw_margins = Some(m);
+                    }
+                }
+            }
             "Duplex" => {
                 shared.duplex = true;
                 pending_duplex = true;
@@ -184,6 +199,7 @@ impl DrvModel {
             manufacturer: self.manufacturer.clone(),
             version: self.version.clone(),
             drv_rel: self.drv_rel.clone(),
+            hw_margins: self.hw_margins,
             ..Default::default()
         }
     }
@@ -277,8 +293,45 @@ fn drv_ppd(name: &str) -> Option<String> {
     None
 }
 
+/// Media-size name → (width,height) in points. `w<N>h<M>` names encode
+/// their own dimensions; common ISO/US names come from the PWG table.
+fn media_size_points(name: &str) -> Option<(f64, f64)> {
+    let named: &[(&str, f64, f64)] = &[
+        ("Letter", 612.0, 792.0),
+        ("Legal", 612.0, 1008.0),
+        ("Executive", 522.0, 756.0),
+        ("Tabloid", 792.0, 1224.0),
+        ("Ledger", 1224.0, 792.0),
+        ("A3", 842.0, 1191.0),
+        ("A4", 595.0, 842.0),
+        ("A5", 420.0, 595.0),
+        ("A6", 298.0, 420.0),
+        ("B4", 729.0, 1032.0),
+        ("B5", 516.0, 729.0),
+        ("Env10", 297.0, 684.0),
+        ("EnvC5", 459.0, 649.0),
+        ("EnvDL", 312.0, 624.0),
+        ("EnvMonarch", 279.0, 540.0),
+        ("4x6", 288.0, 432.0),
+        ("5x7", 360.0, 504.0),
+    ];
+    for (n, w, h) in named {
+        if name.eq_ignore_ascii_case(n) {
+            return Some((*w, *h));
+        }
+    }
+    if let Some(rest) = name.strip_prefix('w') {
+        if let Some((w, h)) = rest.split_once('h') {
+            if let (Ok(w), Ok(h)) = (w.parse::<f64>(), h.parse::<f64>()) {
+                return Some((w, h));
+            }
+        }
+    }
+    None
+}
+
 /// Emit a PPD for a parsed `.drv` model — the observable `ppdc` output shape:
-/// header + PageSize/Resolution/ColorModel/Duplex options + cupsFilter chain.
+/// header + REQUIRED media/resolution keywords + option UIs + cupsFilter chain.
 fn compile_ppd(m: &DrvModel) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
@@ -304,6 +357,10 @@ fn compile_ppd(m: &DrvModel) -> String {
             &m.version
         }
     );
+    // REQUIRED header keywords (ppdOpenFile/cupstestppd section 5.x).
+    s.push_str("*PSVersion: \"(3010.00) 0\"\n*LanguageLevel: \"3\"\n*ColorDevice: True\n*DefaultColorSpace: RGB\n");
+    let mar = m.hw_margins.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+    let _ = writeln!(s, "*HWMargins: {} {} {} {}", mar[0], mar[1], mar[2], mar[3]);
     // Filter chain → cupsFilter lines.
     for f in &m.filters {
         let mut it = f.split_whitespace();
@@ -320,12 +377,47 @@ fn compile_ppd(m: &DrvModel) -> String {
             if i == 0 {
                 let _ = writeln!(s, "*DefaultPageSize: {sz}");
             }
+            let (w, h) = media_size_points(sz).unwrap_or((612.0, 792.0));
             let _ = writeln!(
                 s,
-                "*PageSize {sz}/{sz}: \"<</PageSize[612 792]>>setpagedevice\""
+                "*PageSize {sz}/{sz}: \"<</PageSize[{w:.0} {h:.0}]>>setpagedevice\""
             );
         }
         s.push_str("*CloseUI: *PageSize\n");
+        // REQUIRED PageRegion UI mirroring PageSize.
+        s.push_str(
+            "*OpenUI *PageRegion/Media Size: PickOne\n*OrderDependency: 10 AnySetup *PageRegion\n",
+        );
+        let _ = writeln!(s, "*DefaultPageRegion: {}", m.media_sizes[0]);
+        for sz in &m.media_sizes {
+            let (w, h) = media_size_points(sz).unwrap_or((612.0, 792.0));
+            let _ = writeln!(
+                s,
+                "*PageRegion {sz}/{sz}: \"<</PageSize[{w:.0} {h:.0}]>>setpagedevice\""
+            );
+        }
+        s.push_str("*CloseUI: *PageRegion\n");
+        // REQUIRED ImageableArea/PaperDimension groups (real margins + dims).
+        s.push_str("*OpenGroup: ImageableArea/Imageable Area\n");
+        let _ = writeln!(s, "*DefaultImageableArea: {}", m.media_sizes[0]);
+        for sz in &m.media_sizes {
+            let (w, h) = media_size_points(sz).unwrap_or((612.0, 792.0));
+            let _ = writeln!(
+                s,
+                "*ImageableArea {sz}/{sz}: \"{} {} {:.2} {:.2}\"",
+                mar[0],
+                mar[1],
+                w - mar[2],
+                h - mar[3]
+            );
+        }
+        s.push_str("*CloseGroup: ImageableArea\n*OpenGroup: PaperDimension/Paper Dimension\n");
+        let _ = writeln!(s, "*DefaultPaperDimension: {}", m.media_sizes[0]);
+        for sz in &m.media_sizes {
+            let (w, h) = media_size_points(sz).unwrap_or((612.0, 792.0));
+            let _ = writeln!(s, "*PaperDimension {sz}/{sz}: \"{w:.0} {h:.0}\"");
+        }
+        s.push_str("*CloseGroup: PaperDimension\n");
     }
     // Resolution options.
     if !m.resolutions.is_empty() {
@@ -333,20 +425,25 @@ fn compile_ppd(m: &DrvModel) -> String {
             "*OpenUI *Resolution/Resolution: PickOne\n*OrderDependency: 20 AnySetup *Resolution\n",
         );
         for (i, r) in m.resolutions.iter().enumerate() {
-            // `Resolution - 8 90 0 206 "720dpi/720 DPI"` → name from the quoted label.
+            // `Resolution - 8 90 0 206 "720dpi/720 DPI"` or trailing token
+            // `136dpi` — name/dpi from the last token or quoted label.
             let label = r
                 .split('"')
                 .nth(1)
-                .unwrap_or("")
+                .map_or_else(|| r.split_whitespace().last().unwrap_or(""), |q| q)
                 .split('/')
                 .next()
                 .unwrap_or("600dpi");
+            let (xdpi, ydpi) = label.trim_end_matches("dpi").split_once('x').map_or_else(
+                || (label.trim_end_matches("dpi"), label.trim_end_matches("dpi")),
+                |(x, y)| (x, y),
+            );
             if i == 0 {
                 let _ = writeln!(s, "*DefaultResolution: {label}");
             }
             let _ = writeln!(
                 s,
-                "*Resolution {label}: \"<</HWResolution[600 600]>>setpagedevice\""
+                "*Resolution {label}: \"<</HWResolution[{xdpi} {ydpi}]>>setpagedevice\""
             );
         }
         s.push_str("*CloseUI: *Resolution\n");

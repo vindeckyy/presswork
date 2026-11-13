@@ -1198,10 +1198,59 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
 
 /// `cancel_job()` — cancel + purge a job (state -> canceled, files removed).
 fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option<&Attribute>) {
-    let Some(id) = job_id(req, uri_attr) else {
+    let Some(mut id) = job_id(req, uri_attr) else {
         send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
         return;
     };
+    // printer-uri + job-id=0 → cancel the "current" job on that dest
+    // (upstream cancel_job: first active, else stopped, else not-possible).
+    if id == 0 {
+        let Some(uri) = uri_attr.and_then(attr_text) else {
+            send_status(resp, status::ERROR_NOT_FOUND, "Job not found.");
+            return;
+        };
+        let Some(dest) = dest_name(&uri) else {
+            send_status(
+                resp,
+                status::ERROR_NOT_FOUND,
+                "The printer or class does not exist.",
+            );
+            return;
+        };
+        if ctx.reg().validate_dest(&uri).is_none() {
+            send_status(
+                resp,
+                status::ERROR_NOT_FOUND,
+                "The printer or class does not exist.",
+            );
+            return;
+        }
+        let jr = ctx
+            .jobs
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let active = jr.for_printer(&dest).find(|j| {
+            matches!(
+                j.state,
+                JobState::Pending | JobState::PendingHeld | JobState::Processing
+            )
+        });
+        let stopped = jr
+            .for_printer(&dest)
+            .find(|j| j.state == JobState::ProcessingStopped);
+        match active.or(stopped) {
+            Some(j) => id = j.id,
+            None => {
+                send_status(
+                    resp,
+                    status::ERROR_NOT_POSSIBLE,
+                    format!("No active jobs on {dest}."),
+                );
+                return;
+            }
+        }
+        drop(jr);
+    }
     let mut jobs = ctx
         .jobs
         .write()
@@ -2101,7 +2150,6 @@ fn get_ppds(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
 /// the PPD file bytes as the response document body (upstream `get_ppd` does
 /// the same via `cupsdSendCommand`).
 fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
-    let driverd = ctx.server_bin.join("daemon").join("cups-driverd");
     // The PPD to fetch: a `ppd-name` op attr, else resolve the printer's
     // PPD from `printer-uri` (driverless queues synthesize `everywhere`).
     let name = req
@@ -2113,8 +2161,17 @@ fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
                 .and_then(|u| {
                     let reg = ctx.reg();
                     reg.validate_dest(&u).map(|(p, _)| {
-                        // The queue's stored `ppd-name` option (driver
-                        // selection) wins; bare queues use `everywhere`.
+                        // A saved queue PPD ({ServerRoot}/ppd/<q>.ppd from an
+                        // lpadmin -m/-P upload) wins; then the stored
+                        // `ppd-name`, else driverless `everywhere`.
+                        if ctx
+                            .server_root
+                            .join("ppd")
+                            .join(format!("{}.ppd", p.name))
+                            .is_file()
+                        {
+                            return format!("file:{}", p.name);
+                        }
                         p.options
                             .iter()
                             .find(|(n, _)| n.eq_ignore_ascii_case("ppd-name"))
@@ -2126,26 +2183,44 @@ fn get_ppd(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         send_status(resp, status::ERROR_NOT_FOUND, "No PPD name or printer PPD.");
         return;
     };
-    let base = ctx.server_bin.parent().map_or_else(
-        || std::path::PathBuf::from("/usr/share"),
-        std::path::Path::to_path_buf,
-    );
-    let out = std::process::Command::new(&driverd)
-        .args(["cat", &name])
-        .env("PPDDIR", base.join("ppd"))
-        .env("DRVROOT", base.join("drv"))
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            resp.code = status::OK;
-            resp.document = o.stdout;
+    if let Some(q) = name.strip_prefix("file:") {
+        match std::fs::read(ctx.server_root.join("ppd").join(format!("{q}.ppd"))) {
+            Ok(bytes) => {
+                resp.code = status::OK;
+                resp.document = bytes;
+            }
+            Err(_) => send_status(resp, status::ERROR_NOT_FOUND, "PPD not found."),
         }
-        _ => send_status(
+        return;
+    }
+    match fetch_ppd(ctx, &name) {
+        Some(bytes) => {
+            resp.code = status::OK;
+            resp.document = bytes;
+        }
+        None => send_status(
             resp,
             status::ERROR_NOT_FOUND,
             format!("PPD \"{name}\" not found."),
         ),
     }
+}
+
+/// Fetch PPD bytes for `ppd-name` via `cups-driverd cat` (shared by
+/// `CUPS-Get-PPD` and `CUPS-Add-Modify-Printer`'s ServerRoot/ppd save).
+fn fetch_ppd(ctx: &Ctx, name: &str) -> Option<Vec<u8>> {
+    let driverd = ctx.server_bin.join("daemon").join("cups-driverd");
+    let base = ctx.server_bin.parent().map_or_else(
+        || std::path::PathBuf::from("/usr/share"),
+        std::path::Path::to_path_buf,
+    );
+    let out = std::process::Command::new(&driverd)
+        .args(["cat", name])
+        .env("PPDDIR", base.join("ppd"))
+        .env("DRVROOT", base.join("drv"))
+        .output()
+        .ok()?;
+    out.status.success().then_some(out.stdout)
 }
 
 /// `scalar_value()` — build a single `Value` of the right variant for `tag`.
@@ -2277,6 +2352,73 @@ fn add_modify_printer(
             p.shared = *b;
         }
     }
+    // Queue PPD → {ServerRoot}/ppd/<name>.ppd: either an uploaded PPD in
+    // the request body (lpadmin -m/-P path) or `ppd-name` resolved via
+    // cups-driverd. Upstream test/5.x asserts the file exists.
+    let ppd_dir = ctx.server_root.join("ppd");
+    if !ctx.document.is_empty() {
+        let _ = std::fs::create_dir_all(&ppd_dir);
+        let _ = std::fs::write(ppd_dir.join(format!("{name}.ppd")), ctx.document);
+    }
+    if let Some(ppd) = attr("ppd-name").and_then(attr_text) {
+        if let Some(bytes) = fetch_ppd(ctx, &ppd) {
+            let _ = std::fs::create_dir_all(&ppd_dir);
+            let _ = std::fs::write(ppd_dir.join(format!("{name}.ppd")), bytes);
+        }
+        if !p
+            .options
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("ppd-name"))
+        {
+            p.options.push(("ppd-name".into(), ppd));
+        }
+    }
+    // `lpadmin -o cupsXYZ=value` → patch `*cupsXYZ: value` into the queue
+    // PPD (upstream `cupsdUpdatePrinterPPD` honors `cups*` vendor keywords).
+    let ppd_file = ppd_dir.join(format!("{name}.ppd"));
+    if ppd_file.is_file() {
+        if let Ok(mut text) = std::fs::read_to_string(&ppd_file) {
+            let mut attrs: Vec<&Attribute> =
+                pg.map_or(Vec::new(), |g| g.attributes.iter().collect());
+            attrs.extend(
+                req.groups
+                    .iter()
+                    .find(|g| g.tag == tags::OPERATION)
+                    .map_or(Vec::new(), |g| g.attributes.iter().collect()),
+            );
+            let mut changed = false;
+            for a in attrs {
+                if !a.name.as_str().starts_with("cups") {
+                    continue;
+                }
+                let val = match a.values.first() {
+                    Some(Value::Boolean(b)) => b.to_string(),
+                    Some(Value::Keyword(s)) | Some(Value::Text(s)) | Some(Value::Name(s)) => {
+                        String::from_utf8_lossy(&s.0).into_owned()
+                    }
+                    Some(Value::Integer(i)) => i.to_string(),
+                    _ => continue,
+                };
+                // Title-case booleans to PPD convention (True/False).
+                let val = match val.as_str() {
+                    "true" => "True".into(),
+                    "false" => "False".into(),
+                    v => v.to_string(),
+                };
+                let key = format!("*{}:", a.name.as_str());
+                if let Some(pos) = text.find(&key) {
+                    let end = text[pos..].find('\n').map_or(text.len(), |e| pos + e + 1);
+                    text.replace_range(pos..end, &format!("{key} {val}\n"));
+                } else {
+                    text.push_str(&format!("{key} {val}\n"));
+                }
+                changed = true;
+            }
+            if changed {
+                let _ = std::fs::write(&ppd_file, text);
+            }
+        }
+    }
     if let Some(v) = attr("printer-op-policy").and_then(attr_text) {
         p.op_policy = Some(v);
     }
@@ -2345,7 +2487,19 @@ fn create_local_printer(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
     // Driver selection: an explicit `ppd-name`, a `device-id` (1284 string the
     // backend reported), or `ppd-make`. Store the binding on the queue so
     // `CUPS-Get-PPD`/`Get-Printer-Attributes` reflect the chosen driver.
+    // Upstream stores a queue PPD at {ServerRoot}/ppd/<name>.ppd: either an
+    // uploaded PPD in the request body (lpadmin -m/-P path) or a `ppd-name`
+    // resolved through cups-driverd (test/5.x asserts the file exists).
+    let ppd_dir = ctx.server_root.join("ppd");
+    if !ctx.document.is_empty() {
+        let _ = std::fs::create_dir_all(&ppd_dir);
+        let _ = std::fs::write(ppd_dir.join(format!("{name}.ppd")), ctx.document);
+    }
     if let Some(ppd) = attr("ppd-name").and_then(attr_text) {
+        if let Some(bytes) = fetch_ppd(ctx, &ppd) {
+            let _ = std::fs::create_dir_all(&ppd_dir);
+            let _ = std::fs::write(ppd_dir.join(format!("{name}.ppd")), bytes);
+        }
         p.options.push(("ppd-name".into(), ppd));
     }
     if let Some(devid) = attr("printer-device-id")
@@ -2451,6 +2605,7 @@ fn delete_printer(
         reg.default = None;
     }
     drop(reg);
+    let _ = std::fs::remove_file(ctx.server_root.join("ppd").join(format!("{name}.ppd")));
     save_printers(ctx);
     ctx.dnssd_unpublish(&name);
     ctx.event(
