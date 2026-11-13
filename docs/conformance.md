@@ -90,8 +90,11 @@ subscriptions are deleted when the job leaves the active list
 
 The `5.x` scripts run **stock system clients** against the domain socket
 (`CUPS_SERVER=/tmp/pw-conf/run/cups.sock`, `SO_PEERCRED` auth,
-`CUPS_SERVERROOT=$PWROOT/etc`, `IPP_PORT=8631`, queues `Test1`/`Test2`
-pre-provisioned): `5.1-lpadmin` 10/10, `5.2-lpc` 1/1, `5.3-lpq` 1/1,
+`CUPS_SERVERROOT=$PWROOT/etc`, `BASE=$PWROOT/etc` — the scripts' PPD-file
+assertions resolve `$BASE/ppd/<q>.ppd` — `IPP_PORT=8631`, queues
+`Test1`/`Test2` pre-provisioned, `sample.drv` in `$PWROOT/drv`, and a
+`systemv/`+`berkeley/` symlink tree to the stock client binaries):
+`5.1-lpadmin` 10/10, `5.2-lpc` 1/1, `5.3-lpq` 1/1,
 `5.4-lpstat` 3/3, `5.5-lp` 7/7, `5.6-lpr` 4/4, `5.7-lprm` 2/2,
 `5.8-cancel` 3/3, `5.9-lpinfo` 3/3 — **34/34**.
 
