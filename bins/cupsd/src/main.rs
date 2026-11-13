@@ -1135,6 +1135,12 @@ fn schedule_tick(
             .unwrap_or_else(|| "/usr/lib/cups".into()),
     );
 
+    // `cupsdExpireSubscriptions` timer — upstream calls it from the main
+    // loop so lapsed leases leave the table even with no read traffic.
+    subs.write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .expire();
+
     let found: Option<(i32, pipeline::JobSpec, String, String)> = {
         let jobs_r = jobs
             .read()
@@ -1259,9 +1265,11 @@ fn schedule_tick(
                         events::Event::JobStopped
                     };
                     let job_dest = j.dest.clone();
-                    subs.write()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push(
+                    {
+                        let mut sg = subs
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        sg.push(
                             ev,
                             Some(&job_dest),
                             Some(job_id),
@@ -1272,6 +1280,10 @@ fn schedule_tick(
                             }),
                             &format!("Job {job_id} {}.", if ok { "completed" } else { "aborted" }),
                         );
+                        // `cupsdExpireSubscriptions(NULL, job)` — job subs
+                        // die with the job when it leaves the active list.
+                        sg.expire_job(job_id);
+                    }
                 }
                 log.err(
                     if ok {

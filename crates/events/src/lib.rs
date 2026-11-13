@@ -185,6 +185,13 @@ impl Subscriptions {
         self.subs.retain(|_, s| s.lease > t);
     }
 
+    /// `cupsdExpireSubscriptions(NULL, job)` — drop every subscription tied
+    /// to a job; upstream calls this when the job leaves the active list
+    /// (completes/aborts), so job subs don't outlive their job.
+    pub fn expire_job(&mut self, job_id: i32) {
+        self.subs.retain(|_, s| s.job_id != Some(job_id));
+    }
+
     /// Push an event — queues a [`Notification`] on every covering sub.
     /// `printer`/`job_id` scope the event; a sub matches when its scope is
     /// `None` (any) or equal.
@@ -225,12 +232,16 @@ impl Subscriptions {
         }
     }
 
+    /// A live subscription reads `None` once its lease lapses — expiry is
+    /// filtered at read time so `MaxSubscriptions` still counts the table
+    /// entry until `expire()` reaps it (upstream `cupsdExpireSubscriptions`
+    /// is a separate periodic sweep, not a read-side purge).
     #[must_use]
     pub fn find(&self, id: i32) -> Option<&Subscription> {
-        self.subs.get(&id)
+        self.subs.get(&id).filter(|s| !s.expired())
     }
     pub fn find_mut(&mut self, id: i32) -> Option<&mut Subscription> {
-        self.subs.get_mut(&id)
+        self.subs.get_mut(&id).filter(|s| !s.expired())
     }
     pub fn remove(&mut self, id: i32) -> Option<Subscription> {
         self.subs.remove(&id)
@@ -248,16 +259,23 @@ impl Subscriptions {
             false
         }
     }
-    /// All subscriptions, optionally filtered to a printer/owner.
+    /// All *live* subscriptions, optionally filtered to a printer/owner.
     #[must_use]
     pub fn list(&self, printer: Option<&str>, owner: Option<&str>) -> Vec<&Subscription> {
         self.subs
             .values()
             .filter(|s| {
-                (printer.is_none() || s.printer.as_deref() == printer)
+                !s.expired()
+                    && (printer.is_none() || s.printer.as_deref() == printer)
                     && (owner.is_none() || s.owner == owner.unwrap_or(""))
             })
             .collect()
+    }
+    /// Raw entry count including lapsed leases — `MaxSubscriptions` counts
+    /// every slot until `expire()` reaps it.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.subs.len()
     }
     /// Drain `id`'s pending queue for `Get-Notifications` (ippget pull).
     /// When `wait` is false, returns whatever is queued now.
@@ -271,6 +289,11 @@ impl Subscriptions {
 
 /// `Subscription` helpers for building IPP attrs.
 impl Subscription {
+    /// Lease lapsed (always false for a `NEVER_EXPIRE` lease).
+    #[must_use]
+    pub fn expired(&self) -> bool {
+        self.lease != i64::MAX && self.lease <= now()
+    }
     /// `notify-lease-duration` remaining (0 = expired/never).
     #[must_use]
     pub fn lease_remaining(&self) -> i32 {

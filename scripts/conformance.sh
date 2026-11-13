@@ -7,7 +7,9 @@
 #   --stop        stop the scratch daemon
 #
 # Env knobs: PWROOT (default /tmp/pw-conf), PWPORT (8631), IPPTESTS (dir of
-# upstream examples — defaults to a CUPS source checkout or /tmp/cups-ref).
+# upstream examples — defaults to a CUPS source checkout or /tmp/cups-ref),
+# TESTDIR (dir of upstream functional test/*.test — defaults to
+# $IPPTESTS/../test).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -15,6 +17,7 @@ cd "$(dirname "$0")/.."
 PWROOT="${PWROOT:-/tmp/pw-conf}"
 PWPORT="${PWPORT:-8631}"
 IPPTESTS="${IPPTESTS:-/tmp/cups-ref/examples}"
+TESTDIR="${TESTDIR:-$IPPTESTS/../test}"
 PIDFILE="$PWROOT/run/cupsd.pid"
 
 bootstrap() {
@@ -50,6 +53,7 @@ EOF
 Listen localhost:$PWPORT
 Listen $PWROOT/run/cups.sock
 DefaultShared yes
+MaxSubscriptions 3
 EOF
     cat > "$PWROOT/etc/printers.conf" <<EOF
 # Printer configuration file for CUPS
@@ -71,24 +75,6 @@ KLimit 0
 OpPolicy default
 ErrorPolicy retry-job
 </Printer>
-<DefaultPrinter tlsq>
-PrinterId 1
-UUID urn:uuid:00000000-0000-0000-0000-000000000001
-Info Test queue
-DeviceURI file://$PWROOT/out/print.out
-State Idle
-StateTime $(date +%s)
-ConfigTime $(date +%s)
-Type 4
-Accepting Yes
-Shared Yes
-JobSheets none none
-QuotaPeriod 0
-PageLimit 0
-KLimit 0
-OpPolicy default
-ErrorPolicy retry-job
-</DefaultPrinter>
 EOF
     # MIME DB (read from `DataDir` flat). Prefer the system stock files; fall
     # back to minimal detect rules.
@@ -151,7 +137,7 @@ run() {
         ipp-1.1 ipp-2.0 ipp-2.1 ipp-2.2 ipp-everywhere
     )
     printf 'x' > /tmp/pw-conf-doc.txt
-    # Seed one pending job so `cancel-current-job`'s `Get-Jobs` always has a
+    # Seed a pending job so `cancel-current-job`'s `Get-Jobs` always has a
     # `not-completed` job to find — a `Create-Job` with no `Send-Document`
     # stays `pending-held`/`job-data-insufficient` (the file backend would
     # otherwise complete every job before the query).
@@ -170,25 +156,78 @@ EOF
     ipptool -tv -f /tmp/pw-conf-doc.txt "$uri" /tmp/pw-conf-pending.test >/dev/null 2>&1 || true
     for t in "${tests[@]}"; do
         [ -f "$IPPTESTS/$t.test" ] || { echo "SKIP $t"; skip=$((skip+1)); continue; }
-        local out
-        out=$(env "ppd-name=everywhere" ipptool -tv -f /tmp/pw-conf-doc.txt \
-            -d printer_id=1 -d id=1 \
-            -d make=Generic -d product=Generic -d model=Generic \
-            -d language=en -d psversion=3010.00 \
-            "$uri" "$IPPTESTS/$t.test" 2>&1 || true)
-        # Herestring (not `echo | grep -q`): under `pipefail`, `grep -q` exits
-        # on first match while `echo` still writes → SIGPIPE → 141 → a large
-        # suite's output would falsely read "no verdict".
-        if grep -qE '\[FAIL\]' <<<"$out"; then
-            echo "FAIL $t"; fail=$((fail+1))
-        elif grep -qE '\[PASS\]' <<<"$out"; then
-            echo "PASS $t"; pass=$((pass+1))
-        else
-            echo "---- $t (no verdict)"; skip=$((skip+1))
-        fi
+        rc=0; verdict "examples/$t" "$uri" "$IPPTESTS/$t.test" || rc=$?
+        case $rc in
+            0) pass=$((pass+1));;
+            1) fail=$((fail+1));;
+            *) skip=$((skip+1));;
+        esac
     done
+    # ---- Functional tier: upstream test/4.x over the unix socket ----
+    # These exercise admin ops (CUPS-Add-Modify-Printer, CUPS-Get/Set-
+    # Default, job + subscription ops) that require peer credentials —
+    # only available over the domain socket, which ipptool reaches via a
+    # %-encoded socket path in the URI host.
+    if [ -d "$TESTDIR" ]; then
+        # Fresh daemon for the functional tier: the examples matrix's
+        # create-printer-subscription leaves a live sub that would inflate
+        # the global table and trip 4.4's MaxSubscriptions check early —
+        # upstream's own harness runs the numbered tests on a daemon that
+        # never saw the example ops.
+        restart >/dev/null 2>&1
+        # Seed one `pending-held` job for the functional tier only — 4.3's
+        # `Get All Jobs` expects a `not-completed` job to still exist after
+        # its own prints have all completed/been canceled. Seeded after the
+        # restart so it can't leak into `ipp-1.1`'s completion polling.
+        ipptool -tv -f /tmp/pw-conf-doc.txt "$uri" /tmp/pw-conf-pending.test >/dev/null 2>&1 || true
+        # The 4.x suites add/modify/delete printers and set a default —
+        # snapshot printers.conf and restore afterward so the examples
+        # matrix's queue set stays deterministic across runs.
+        cp "$PWROOT/etc/printers.conf" "$PWROOT/etc/printers.conf.bak" 2>/dev/null || true
+        local enc root_uri
+        enc=$(printf '%s' "$PWROOT" | sed 's|/|%2F|g')
+        root_uri="ipp://$enc%2Frun%2Fcups.sock/printers/tlsq"
+        for t in 4.1-requests 4.2-cups-printer-ops 4.3-job-ops 4.4-subscription-ops; do
+            [ -f "$TESTDIR/$t.test" ] || { echo "SKIP test/$t"; skip=$((skip+1)); continue; }
+            rc=0; verdict "test/$t" "$root_uri" "$TESTDIR/$t.test" || rc=$?
+            case $rc in
+                0) pass=$((pass+1));;
+                1) fail=$((fail+1));;
+                *) skip=$((skip+1));;
+            esac
+        done
+        if [ -f "$PWROOT/etc/printers.conf.bak" ]; then
+            mv "$PWROOT/etc/printers.conf.bak" "$PWROOT/etc/printers.conf"
+            # Restart so the in-memory registry drops the Test1/Test2
+            # mutations too — a repeat --run then sees the same seed set.
+            restart >/dev/null 2>&1
+        fi
+    fi
     echo "=== $pass passed, $fail failed, $skip skipped ==="
     [ "$fail" -eq 0 ]
+}
+
+# Print PASS/FAIL/SKIP for one .test file; return 0=pass, 1=fail, 2=skip.
+verdict() {
+    local name="$1" uri="$2" file="$3"
+    local out
+    out=$(env "ppd-name=everywhere" ipptool -tv -f /tmp/pw-conf-doc.txt \
+        -d printer_id=1 -d id=1 \
+        -d make=Generic -d product=Generic -d model=Generic \
+        -d language=en -d psversion=3010.00 \
+        "$uri" "$file" 2>&1 || true)
+    # Herestring (not `echo | grep -q`): under `pipefail`, `grep -q` exits
+    # on first match while `echo` still writes → SIGPIPE → 141 → a large
+    # suite's output would falsely read "no verdict".
+    if grep -qE '\[FAIL\]' <<<"$out"; then
+        local safe; safe=$(printf '%s' "$name" | tr '/.' '__')
+        printf '%s\n' "$out" > "/tmp/pw-conf-fail-$safe.txt"
+        echo "FAIL $name (log: /tmp/pw-conf-fail-$safe.txt)"; return 1
+    elif grep -qE '\[PASS\]' <<<"$out"; then
+        echo "PASS $name"; return 0
+    else
+        echo "---- $name (no verdict)"; return 2
+    fi
 }
 
 case "${1:-}" in

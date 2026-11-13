@@ -285,13 +285,18 @@ pub struct Registry {
 
 impl Registry {
     /// Look up a destination by name or URI path (`/printers/x`,
-    /// `/classes/x`, bare `x`).
+    /// `/classes/x`, bare `x`, or any path ending in `/printers/x` — the
+    /// resource segment can follow an authority or socket-path prefix).
     #[must_use]
     pub fn find(&self, name_or_path: &str) -> Option<&Printer> {
-        let name = name_or_path
-            .strip_prefix("/printers/")
-            .or_else(|| name_or_path.strip_prefix("/classes/"))
-            .unwrap_or(name_or_path);
+        let mut name = name_or_path;
+        for seg in ["/printers/", "/classes/"] {
+            if let Some(i) = name_or_path.rfind(seg) {
+                name = &name_or_path[i + seg.len()..];
+                break;
+            }
+        }
+        let name = name.split('?').next().unwrap_or(name);
         self.printers.get(name)
     }
 

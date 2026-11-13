@@ -42,14 +42,42 @@ conformance.sh --restart     rebuild cupsd + fresh daemon
 conformance.sh               bootstrap + run
 ```
 
-Current result: **31 passed / 0 failed / 0 skipped** — all
-`get-printer-*`/`get-jobs`/`get-ppds*`/`print-*`/`create-job`/PPD ops and
-all five `ipp-*` RFC suites green.
+Current result: **35 passed / 0 failed / 0 skipped** — the 31-file
+examples matrix plus the upstream functional tier
+(`test/4.1-requests`, `test/4.2-cups-printer-ops`, `test/4.3-job-ops`,
+`test/4.4-subscription-ops`), all green.
 
 `--run` first seeds one pending job (`Create-Job` with no `Send-Document`
 → `pending-held`/`job-data-insufficient`) so `cancel-current-job`'s
 `Get-Jobs` always has a `not-completed` job to find; the instant `file`
-backend would otherwise complete every job before the query.
+backend would otherwise complete every job before the query. It then
+restarts the daemon for the functional tier (so the example ops' leftover
+subscriptions can't perturb `MaxSubscriptions` counting — upstream's own
+harness runs the numbered tests on a daemon that never saw the example
+ops) and seeds one more `pending-held` job for 4.3's `Get All Jobs`.
+
+## Functional tier — upstream `test/4.x` over the unix socket
+
+The numbered suites run against the domain socket so admin ops
+authenticate via `SO_PEERCRED` peer credentials (`@SYSTEM` → configured
+`SystemGroup`), matching upstream's `run-stp-tests.sh` semantics:
+
+- `4.1-requests` 8/8 — strict request-validation matrix incl. bare
+  `job-uri` → `bad-request` and all-printers root URIs.
+- `4.2-cups-printer-ops` 14/14 — CUPS-Add/Modify/Delete-Printer,
+  CUPS-Get/Set-Default, subscription add, IPP/2.x attrs.
+- `4.3-job-ops` 13/13 — print/hold/release/cancel/get-jobs/get-all-jobs
+  incl. embedded `subscription` group → `notify-subscription-id` and
+  `job-hold-until indefinite` → `pending-held`.
+- `4.4-subscription-ops` 5/5 — lease expiry, multi-segment create
+  (one request → multiple subscriptions via `IPP_TAG_ZERO` separators),
+  `MaxSubscriptions` → `client-error-too-many-subscriptions`.
+
+Subscription lifecycle matches upstream `cupsdExpireSubscriptions`:
+lapsed leases are *removed* on `Get-Subscriptions`/
+`Get-Subscription-Attributes` reads and on a scheduler tick; a job's
+subscriptions are deleted when the job leaves the active list
+(`cupsdExpireSubscriptions(NULL, job)`).
 
 ## RFC / PWG suites — all green
 

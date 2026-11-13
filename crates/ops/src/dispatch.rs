@@ -60,6 +60,8 @@ pub struct Ctx<'a> {
     pub max_lease_duration: i32,
     /// `MaxEvents`.
     pub max_events: i32,
+    /// `MaxSubscriptions` — cap on live subscriptions.
+    pub max_subscriptions: i32,
     /// Notifier scheme names present in `ServerBin/notifier`.
     pub notifiers: Vec<String>,
     /// `printer-op-policy-supported` (policy names).
@@ -274,6 +276,7 @@ impl<'a> Ctx<'a> {
             multiple_operation_timeout: cfg.cupsd.multiple_operation_timeout,
             max_lease_duration: cfg.cupsd.max_lease_duration,
             max_events: cfg.cupsd.max_events,
+            max_subscriptions: cfg.cupsd.max_subscriptions,
             notifiers: Vec::new(),
             policies: cfg.cupsd.policies.iter().map(|p| p.name.clone()).collect(),
             policy_defs: &cfg.cupsd.policies,
@@ -730,7 +733,11 @@ fn get_printers(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, want_class: 
             }
         }
         if count > 0 {
-            resp.group_mut(tags::PRINTER); // group separator for next printer
+            // libcups `ippAddSeparator` — an in-group delimiter attribute,
+            // not a second group: `copy_printer_attrs` pushes into the
+            // single PRINTER group, so the delimiter marks the next
+            // printer's attribute run on the wire.
+            resp.push(tags::PRINTER, Attribute::separator());
         }
         copy_printer_attrs(resp, p, ctx, &ra, ctx.queued_job_count);
         count += 1;
@@ -795,7 +802,11 @@ fn get_jobs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Option
             .filter(|_| uri.contains("/jobs/"))
             .and_then(|s| s.parse::<i32>().ok())
         else {
-            send_status(resp, status::ERROR_BAD_REQUEST, "Bad \"job-uri\" attribute.");
+            send_status(
+                resp,
+                status::ERROR_BAD_REQUEST,
+                "Bad \"job-uri\" attribute.",
+            );
             return;
         };
         Some(id)
@@ -1022,6 +1033,11 @@ fn submit_document(
         .find(|g| g.tag == tags::JOB)
         .map(|g| g.attributes.clone())
         .unwrap_or_default();
+    if hold_requested(&job.attrs) {
+        // `job-hold-until` — stays `pending-held` until Release-Job.
+        job.state = job::JobState::PendingHeld;
+        job.reasons = vec!["job-hold-until-specified".into()];
+    }
 
     // Spool the document.
     let data = job::Job::data_path(&ctx.request_root, id, 1);
@@ -1059,6 +1075,7 @@ fn submit_document(
         ctx,
         &requested_attrs(req),
     );
+    maybe_add_job_subscription(req, resp, ctx, id, &dest);
 }
 
 /// `create_job()` — allocates an empty job awaiting Send-Document(s).
@@ -1114,6 +1131,7 @@ fn create_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         ctx,
         &requested_attrs(req),
     );
+    maybe_add_job_subscription(req, resp, ctx, id, &dest);
 }
 
 /// `send_document()` — attach a document to an existing Create-Job job.
@@ -1157,14 +1175,20 @@ fn send_document(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: O
         name: ctx.document_name.clone(),
         format,
     });
-    // `last-document` flag finalizes the job.
+    // `last-document` flag finalizes the job — but a `job-hold-until`
+    // template stays `pending-held` until an explicit Release-Job.
     let last = last_attr
         .values
         .first()
         .is_some_and(|v| matches!(v, Value::Boolean(true)));
     if last {
-        job.state = job::JobState::Pending;
-        job.reasons = vec!["job-incoming".into()];
+        if hold_requested(&job.attrs) {
+            job.state = job::JobState::PendingHeld;
+            job.reasons = vec!["job-hold-until-specified".into()];
+        } else {
+            job.state = job::JobState::Pending;
+            job.reasons = vec!["job-incoming".into()];
+        }
     }
     let _ = jobs.save(&ctx.request_root, id);
     resp.code = status::OK;
@@ -2587,16 +2611,40 @@ fn set_printer_attributes(
 
 // ==================== P5: IPP subscriptions ====================
 
+/// Resource path inside an `ipp[s]://` URI — after `host[:port]`. A
+/// domain-socket URI carries the socket path in the authority slot
+/// (`ipp:///tmp/.../cups.sock:8631/`), so the port marker is used to split
+/// authority from resource when present.
+fn uri_resource(uri: &str) -> &str {
+    let rest = uri
+        .strip_prefix("ipp://")
+        .or_else(|| uri.strip_prefix("ipps://"))
+        .map_or(uri, |r| r.split('?').next().map_or(r, |s| s));
+    // `host:port/resource` — port is digits between the last ':' and '/'.
+    if let Some(colon) = rest.rfind(':') {
+        if let Some(slash) = rest[colon..].find('/') {
+            if rest[colon + 1..colon + slash]
+                .chars()
+                .all(|c| c.is_ascii_digit())
+                && !rest[colon + 1..colon + slash].is_empty()
+            {
+                return &rest[colon + slash..];
+            }
+        }
+    }
+    // No port — authority ends at the first '/'.
+    match rest.find('/') {
+        Some(i) => &rest[i..],
+        None => "/",
+    }
+}
+
 /// True when a `printer-uri` names no single destination — the server root
 /// (`ipp://host/` or `ipp://host`) or a `/printers`/`/classes` collection.
 /// Such URIs mean "all printers" for ops like Get-Jobs / Get-Printers.
 fn is_all_printers_uri(uri: &str) -> bool {
-    let path = uri
-        .strip_prefix("ipp://")
-        .or_else(|| uri.strip_prefix("ipps://"))
-        .map_or(uri, |rest| rest.split('/').nth(1).map_or("", |s| s));
-    let path = path.trim_end_matches('/');
-    path.is_empty() || path == "printers" || path == "classes"
+    let path = uri_resource(uri).trim_end_matches('/');
+    path.is_empty() || path == "/printers" || path == "/classes"
 }
 
 /// Printer/class name from a `printer-uri` — last `/printers|classes/` segment.
@@ -2612,27 +2660,17 @@ fn dest_name(uri: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Find an attribute in the `subscription-attributes-tag` group, falling
-/// back to the operation group (upstream accepts either placement).
-fn find_sub<'a>(req: &'a IppMessage, name: &str) -> Option<&'a Attribute> {
-    req.find(tags::SUBSCRIPTION, name)
-        .or_else(|| req.find(tags::OPERATION, name))
-}
-
-/// `notify-events` attr -> parsed Event mask. `None` when missing/invalid.
-fn notify_events(req: &IppMessage) -> Option<Vec<events::Event>> {
-    let a = find_sub(req, "notify-events")?;
-    let mut out = Vec::new();
-    for v in &a.values {
-        if let Value::Keyword(k) = v {
-            out.push(events::Event::from_name(k.as_str().as_ref())?);
-        }
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+/// `job-hold-until` in the job-template attrs — true for `indefinite` or a
+/// named/time-window hold; `no-hold` (and its absence) means unheld.
+fn hold_requested(attrs: &[Attribute]) -> bool {
+    attrs
+        .iter()
+        .find(|a| a.name.as_str() == "job-hold-until")
+        .is_some_and(|a| {
+            a.values
+                .first()
+                .is_some_and(|v| !matches!(v, Value::Keyword(k) if k.as_str() == "no-hold"))
+        })
 }
 
 /// `requesting-user-name` from the op group (auth identity fallback).
@@ -2646,17 +2684,162 @@ fn requesting_user(req: &IppMessage, ctx: &Ctx) -> String {
         .unwrap_or_else(|| "anonymous".into())
 }
 
+/// Subscription-attribute segments inside a request — upstream treats the
+/// subscription group's attribute list as flat, delimited into one segment
+/// per requested subscription by `IPP_TAG_ZERO` separators (repeated
+/// `subscription` group delimiters merge that way on the wire).
+/// Returns one Vec of attribute refs per segment, in request order.
+fn sub_segments(req: &IppMessage) -> Vec<Vec<&Attribute>> {
+    let mut segs: Vec<Vec<&Attribute>> = Vec::new();
+    for g in &req.groups {
+        if g.tag != tags::SUBSCRIPTION {
+            continue;
+        }
+        let mut cur: Vec<&Attribute> = Vec::new();
+        for a in &g.attributes {
+            if a.is_separator() {
+                if !cur.is_empty() {
+                    segs.push(std::mem::take(&mut cur));
+                }
+            } else {
+                cur.push(a);
+            }
+        }
+        if !cur.is_empty() {
+            segs.push(cur);
+        }
+    }
+    segs
+}
+
+/// Look up an attribute inside one subscription segment.
+fn seg_find<'a>(seg: &[&'a Attribute], name: &str) -> Option<&'a Attribute> {
+    seg.iter().find(|a| a.name.as_str() == name).copied()
+}
+
+/// `notify-events` inside one segment → parsed Event list (None if absent).
+fn seg_events(seg: &[&Attribute]) -> Option<Vec<events::Event>> {
+    let a = seg_find(seg, "notify-events")?;
+    let mut out = Vec::new();
+    for v in &a.values {
+        if let Value::Keyword(k) = v {
+            out.push(events::Event::from_name(k.as_str().as_ref())?);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Integer value of an attribute inside a segment.
+fn seg_int(seg: &[&Attribute], name: &str) -> Option<i32> {
+    match seg_find(seg, name).and_then(|a| a.values.first()) {
+        Some(Value::Integer(i)) => Some(*i),
+        _ => None,
+    }
+}
+
+/// True when the segment carries `notify-recipient-uri` or
+/// `notify-pull-method` — upstream ignores segments with neither.
+fn seg_subscribed(seg: &[&Attribute]) -> bool {
+    seg_find(seg, "notify-recipient-uri").is_some() || seg_find(seg, "notify-pull-method").is_some()
+}
+
+fn seg_user_data(seg: &[&Attribute]) -> Option<Vec<u8>> {
+    match seg_find(seg, "notify-user-data").and_then(|a| a.first()) {
+        Some(Value::OctetString(b)) => Some(b.clone()),
+        _ => None,
+    }
+}
+
+/// Emit `notify-subscription-id` (+ lease) for a created sub — a separator
+/// precedes each additional sub's block, as `ippAddSeparator` does upstream.
+fn emit_sub_id(resp: &mut IppMessage, id: i32, lease_out: i32) {
+    let g = resp.group_mut(tags::SUBSCRIPTION);
+    if !g.attributes.is_empty() {
+        g.attributes.push(Attribute::separator());
+    }
+    g.attributes.push(Attribute::new(
+        "notify-subscription-id",
+        tags::INTEGER,
+        vec![Value::Integer(id)],
+    ));
+    g.attributes.push(Attribute::new(
+        "notify-lease-duration",
+        tags::INTEGER,
+        vec![Value::Integer(lease_out)],
+    ));
+}
+
+/// Embedded job subscription — when a job-creation request carries
+/// `subscription-attributes-tag` content (RFC 3995 §5.1.2), create one job
+/// subscription per segment and emit `notify-subscription-id` back.
+/// Upstream semantics: a segment with neither `notify-recipient-uri` nor
+/// `notify-pull-method` is ignored; `notify-lease-duration` is not allowed
+/// on job subscriptions; `notify-events` defaults to `job-completed`.
+fn maybe_add_job_subscription(
+    req: &IppMessage,
+    resp: &mut IppMessage,
+    ctx: &Ctx,
+    job_id: i32,
+    dest: &str,
+) {
+    let segs = sub_segments(req);
+    if segs.is_empty() {
+        return; // no embedded subscription group
+    }
+    let owner = requesting_user(req, ctx);
+    for seg in segs {
+        if !seg_subscribed(&seg) {
+            continue;
+        }
+        if seg_find(&seg, "notify-lease-duration").is_some() {
+            send_status(
+                resp,
+                status::ERROR_BAD_REQUEST,
+                "notify-lease-duration cannot be used with job subscriptions.",
+            );
+            return;
+        }
+        let ev = seg_events(&seg).unwrap_or_else(|| vec![events::Event::JobCompleted]);
+        if ctx.max_subscriptions > 0 && ctx.subs().count() >= ctx.max_subscriptions as usize {
+            return; // job still created; sub request silently capped
+        }
+        let id = ctx.subs_write().add(
+            Some(dest.to_string()),
+            Some(job_id),
+            ev,
+            owner.clone(),
+            events::NEVER_EXPIRE,
+            seg_user_data(&seg),
+        );
+        emit_sub_id(resp, id, 0);
+    }
+}
+
 /// `Create-{Printer,Job}-Subscriptions` — `create_subscription`.
+/// One subscription per attribute segment — repeated `subscription` group
+/// delimiters arrive as separators inside the merged group ("Add 2 ..." in
+/// upstream 4.4). Upstream semantics: a segment with neither
+/// `notify-recipient-uri` nor `notify-pull-method` stops processing; the
+/// status stays `client-error-bad-request` until a sub is actually created.
 fn create_subscription(
     req: &IppMessage,
     resp: &mut IppMessage,
     ctx: &Ctx,
     uri_attr: Option<&Attribute>,
 ) {
-    let Some(events) = notify_events(req) else {
-        send_status(resp, status::ERROR_BAD_REQUEST, "Missing notify-events.");
+    let segs = sub_segments(req);
+    if segs.is_empty() {
+        send_status(
+            resp,
+            status::ERROR_BAD_REQUEST,
+            "No subscription attributes in request.",
+        );
         return;
-    };
+    }
     let job_sub = req.code == op::CREATE_JOB_SUBSCRIPTIONS;
     let (printer, job_id) = if job_sub {
         let jid = int_attr(req, "job-id").map(|j| j as i32);
@@ -2668,35 +2851,50 @@ fn create_subscription(
             None,
         )
     };
-    let lease = find_sub(req, "notify-lease-duration")
-        .and_then(|a| a.values.first())
-        .and_then(|v| match v {
-            Value::Integer(i) => Some(*i),
-            _ => None,
-        })
-        .unwrap_or(events::NEVER_EXPIRE);
-    let user_data = find_sub(req, "notify-user-data")
-        .and_then(|a| a.first())
-        .and_then(|v| match v {
-            Value::OctetString(b) => Some(b.clone()),
-            _ => None,
-        });
     let owner = requesting_user(req, ctx);
-    let id = ctx
-        .subs_write()
-        .add(printer, job_id, events, owner, lease, user_data);
-    resp.code = status::OK;
-    let g = resp.group_mut(tags::SUBSCRIPTION);
-    g.attributes.push(Attribute::new(
-        "notify-subscription-id",
-        tags::INTEGER,
-        vec![Value::Integer(id)],
-    ));
-    g.attributes.push(Attribute::new(
-        "notify-lease-duration",
-        tags::INTEGER,
-        vec![Value::Integer(0)],
-    ));
+    resp.code = status::ERROR_BAD_REQUEST;
+    for seg in segs {
+        if !seg_subscribed(&seg) {
+            break; // upstream: stops at the first segment with no recipient
+        }
+        let ev = match seg_events(&seg) {
+            Some(e) => e,
+            None if job_id.is_some() => vec![events::Event::JobCompleted],
+            None if printer.is_some() => {
+                vec![events::Event::PrinterStateChanged]
+            }
+            None => {
+                send_status(
+                    resp,
+                    status::ERROR_BAD_REQUEST,
+                    "notify-events not specified.",
+                );
+                return;
+            }
+        };
+        let lease = seg_int(&seg, "notify-lease-duration").unwrap_or(events::NEVER_EXPIRE);
+        // `MaxSubscriptions` — a full table is `client-error-too-many-subscriptions`.
+        // Counts the raw slot table like upstream's `ArrayCount(Subscriptions)` —
+        // lapsed-but-unreaped entries still occupy a slot.
+        if ctx.max_subscriptions > 0 && ctx.subs().count() >= ctx.max_subscriptions as usize {
+            send_status(
+                resp,
+                status::ERROR_TOO_MANY_SUBSCRIPTIONS,
+                "Too many subscriptions.",
+            );
+            return;
+        }
+        let id = ctx.subs_write().add(
+            printer.clone(),
+            job_id,
+            ev,
+            owner.clone(),
+            lease,
+            seg_user_data(&seg),
+        );
+        emit_sub_id(resp, id, lease);
+        resp.code = status::OK;
+    }
 }
 
 /// Emit a subscription's description group (`cupsdCopySubscription`).
@@ -2758,6 +2956,10 @@ fn get_subscriptions(
     ctx: &Ctx,
     uri_attr: Option<&Attribute>,
 ) {
+    // `cupsdExpireSubscriptions(NULL, NULL)` — lapsed leases are *removed*
+    // from the table on read, so `MaxSubscriptions` slot counting matches
+    // upstream's `cupsArrayCount(Subscriptions)`.
+    ctx.subs_write().expire();
     resp.code = status::OK;
     let printer = uri_attr.and_then(attr_text).and_then(|u| dest_name(&u));
     let owner = req
@@ -2789,6 +2991,8 @@ fn get_subscription_attrs(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx) {
         );
         return;
     };
+    // `cupsdExpireSubscriptions(NULL, NULL)` — purge lapsed leases first.
+    ctx.subs_write().expire();
     let subs = ctx.subs();
     let Some(s) = subs.find(id) else {
         send_status(
