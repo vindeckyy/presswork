@@ -14,7 +14,7 @@ install=
 source=("https://github.com/vindeckyy/yindle/releases/download/v${pkgver}/yindle-${pkgver}-x86_64-unknown-linux-gnu.tar.gz"
         "yindle.sysusers"
         "yindle.tmpfiles")
-sha256sums=('daa9fc8ecb9815b5909abad4be36b7faa177d35cd03d373aa8c54bc26bdad4fb'
+sha256sums=('9c64055af60297f9990a356a7e98d3ad4aafb0b07d38ac25bcb8e132d80a1ba8'
             'SKIP'
             'SKIP')
 
