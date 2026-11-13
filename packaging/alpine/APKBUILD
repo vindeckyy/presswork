@@ -1,6 +1,6 @@
 # Maintainer: yindle contributors <yindle@example.invalid>
 pkgname=yindle
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=0
 pkgdesc="Memory-safe CUPS-compatible print spooler and IPP scheduler"
 url="https://example.invalid/yindle"

@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "authn"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "yindle-sys",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "authz"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cups-config",
 ]
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "backend-common"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "base64"
@@ -170,7 +170,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cups-backend-dnssd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
  "dnssd",
@@ -178,14 +178,14 @@ dependencies = [
 
 [[package]]
 name = "cups-backend-file"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
 ]
 
 [[package]]
 name = "cups-backend-ipp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
  "cups-tls",
@@ -196,21 +196,21 @@ dependencies = [
 
 [[package]]
 name = "cups-backend-lpd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
 ]
 
 [[package]]
 name = "cups-backend-parallel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
 ]
 
 [[package]]
 name = "cups-backend-serial"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
  "yindle-sys",
@@ -218,28 +218,28 @@ dependencies = [
 
 [[package]]
 name = "cups-backend-snmp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
 ]
 
 [[package]]
 name = "cups-backend-socket"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
 ]
 
 [[package]]
 name = "cups-backend-usb"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "backend-common",
 ]
 
 [[package]]
 name = "cups-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipp-codec",
  "yindle-sys",
@@ -247,23 +247,23 @@ dependencies = [
 
 [[package]]
 name = "cups-dbus"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "cups-deviced"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "cups-driverd"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "cups-exec"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "cups-log"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipp-codec",
  "time",
@@ -271,14 +271,14 @@ dependencies = [
 
 [[package]]
 name = "cups-lpd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipp-codec",
 ]
 
 [[package]]
 name = "cups-tls"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rcgen",
  "rustls",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "cupsd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "authn",
  "cups-config",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "cupsfilter"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "data-encoding"
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "dnssd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mdns-sd",
  "printer",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "events"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "fastrand"
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "httpd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror",
  "tokio",
@@ -452,11 +452,11 @@ dependencies = [
 
 [[package]]
 name = "ipp-codec"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "job"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ipp-codec",
 ]
@@ -529,7 +529,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mime-db"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "minimal-lexical"
@@ -634,7 +634,7 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "ops"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "authz",
  "cups-config",
@@ -665,7 +665,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pipeline"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "mime-db",
 ]
@@ -684,7 +684,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "printer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cups-config",
  "ipp-codec",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "yindle-sys"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "libc",
 ]

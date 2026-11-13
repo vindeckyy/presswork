@@ -1,6 +1,6 @@
 # Maintainer: vindeckyy <https://github.com/vindeckyy>
 pkgname=yindle-bin
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Memory-safe CUPS 2.x-compatible print spooler and IPP scheduler in Rust (prebuilt release binaries)"
 arch=('x86_64')

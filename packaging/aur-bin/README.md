@@ -18,7 +18,7 @@ makepkg --printsrcinfo > .SRCINFO
 makepkg -si         # sanity check: installs yindle locally
 
 # 3. push
-git add -A && git commit -m "yindle-bin 0.1.0-1" && git push
+git add -A && git commit -m "yindle-bin 0.1.1-1" && git push
 ```
 
 ## Per-release maintenance

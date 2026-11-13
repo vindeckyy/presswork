@@ -123,7 +123,7 @@ Flags: `--no-start`, `--version X`, `--from DIR`, `--force`.
 
 Prefer a package or the manual path? Each
 [release](https://github.com/vindeckyy/yindle/releases) also ships a
-`.deb` (`sudo dpkg -i yindle_0.1.0-1_amd64.deb`, declared
+`.deb` (`sudo dpkg -i yindle_0.1.1-1_amd64.deb`, declared
 `Conflicts: cups,cups-daemon`) and the raw FHS tarball.
 
 ```

@@ -17,5 +17,5 @@ keywords:
   - rust
 license: Apache-2.0 OR MIT
 repository-code: https://github.com/vindeckyy/yindle
-version: 0.1.0
-date-released: "2026-11-12"
+version: 0.1.1
+date-released: "2026-11-13"

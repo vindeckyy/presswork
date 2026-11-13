@@ -1,6 +1,6 @@
 # Maintainer: vindeckyy <https://github.com/vindeckyy>
 pkgname=yindle
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="A memory-safe, CUPS 2.x-compatible print spooler and IPP scheduler in Rust (driverless-first)"
 arch=('x86_64' 'aarch64')

@@ -1,5 +1,5 @@
 Name:           yindle
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Memory-safe CUPS-compatible print spooler and IPP scheduler
 License:        MIT AND Apache-2.0
@@ -72,5 +72,7 @@ chmod 0700 /etc/cups/ssl 2>/dev/null || :
 %config %{_pamdir}/cups
 
 %changelog
+* Fri Nov 13 2026 yindle contributors <yindle@example.invalid> - 0.1.1-1
+- Rename: presswork is now yindle
 * Wed Nov 12 2025 yindle contributors <yindle@example.invalid> - 0.1.0-1
 - Initial package

@@ -13,13 +13,13 @@
 
 rustPlatform.buildRustPackage rec {
   pname = "yindle";
-  version = "0.1.0";
+  version = "0.1.1";
 
   src = fetchFromGitHub {
     owner = "vindeckyy";
     repo = "yindle";
     rev = "v${version}";
-    hash = lib.fakeHash; # prefetch: nix-prefetch-github vindeckyy yindle --rev v0.1.0
+    hash = lib.fakeHash; # prefetch: nix-prefetch-github vindeckyy yindle --rev v0.1.1
   };
 
   cargoHash = lib.fakeHash; # printed by the first build attempt

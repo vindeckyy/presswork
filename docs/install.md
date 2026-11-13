@@ -30,7 +30,7 @@ on the host; remove the container and volumes to uninstall.
 ## Debian / Ubuntu package
 
 ```sh
-sudo dpkg -i yindle_0.1.0-1_amd64.deb
+sudo dpkg -i yindle_0.1.1-1_amd64.deb
 ```
 
 from the
@@ -49,7 +49,7 @@ coexists with a system CUPS.
 
 ## Manual tarball
 
-Untar `yindle-0.1.0-x86_64-unknown-linux-gnu.tar.gz`, run
+Untar `yindle-0.1.1-x86_64-unknown-linux-gnu.tar.gz`, run
 `./install.sh` inside (or copy the tree by hand), then
 `systemctl enable --now cups.socket cups.path`.
 
