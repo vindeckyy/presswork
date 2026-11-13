@@ -83,13 +83,13 @@ pub fn groups_of(user: &str) -> Vec<String> {
         }
         let mut n: libc::c_int = 0;
         // size probe
-        libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, std::ptr::null_mut(), &mut n);
+        libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, std::ptr::null_mut(), &raw mut n);
         if n <= 0 {
             n = 16;
         }
         let mut gids = vec![0u32; usize::try_from(n).unwrap_or(0)];
         let mut got = n;
-        if libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, gids.as_mut_ptr(), &mut got) < 0 {
+        if libc::getgrouplist(c.as_ptr(), (*pw).pw_gid, gids.as_mut_ptr(), &raw mut got) < 0 {
             return Vec::new();
         }
         gids.truncate(usize::try_from(got.max(0)).unwrap_or(0));
@@ -197,7 +197,7 @@ pub fn peer_cred(fd: std::os::fd::RawFd) -> Option<(i32, u32, u32)> {
             libc::SOL_SOCKET,
             libc::SO_PEERCRED,
             std::ptr::addr_of_mut!(uc).cast::<libc::c_void>(),
-            &mut len,
+            &raw mut len,
         )
     };
     if rc == 0 {
@@ -221,7 +221,7 @@ pub fn socket_family(fd: std::os::fd::RawFd) -> i32 {
         libc::getsockname(
             fd,
             std::ptr::addr_of_mut!(ss).cast::<libc::sockaddr>(),
-            &mut len,
+            &raw mut len,
         )
     };
     if rc == 0 {
@@ -246,7 +246,7 @@ impl Termios {
         // SAFETY: `termios` is a POD; all-zero is valid before tcgetattr fills it.
         let mut t: libc::termios = unsafe { std::mem::zeroed() };
         // SAFETY: `t` is a valid out-param; `fd` may be any fd (fails harmlessly).
-        if unsafe { libc::tcgetattr(fd, &mut t) } == 0 {
+        if unsafe { libc::tcgetattr(fd, &raw mut t) } == 0 {
             Some(Self(t))
         } else {
             None
@@ -257,7 +257,9 @@ impl Termios {
     #[must_use]
     pub fn set(&self, fd: std::os::fd::RawFd) -> bool {
         // SAFETY: `&self.0` is a valid in-param; `fd` may be any fd.
-        unsafe { libc::tcdrain(fd) == 0 && libc::tcsetattr(fd, libc::TCSADRAIN, &self.0) == 0 }
+        unsafe {
+            libc::tcdrain(fd) == 0 && libc::tcsetattr(fd, libc::TCSADRAIN, &raw const self.0) == 0
+        }
     }
 
     /// Map a numeric baud rate to a `B*` constant; `None` if unsupported.
@@ -278,10 +280,10 @@ impl Termios {
             4800 => libc::B4800,
             9600 => libc::B9600,
             19200 => libc::B19200,
-            38400 => libc::B38400,
-            57600 => libc::B57600,
-            115200 => libc::B115200,
-            230400 => libc::B230400,
+            38_400 => libc::B38400,
+            57_600 => libc::B57600,
+            115_200 => libc::B115200,
+            230_400 => libc::B230400,
             _ => return None,
         })
     }
@@ -290,8 +292,8 @@ impl Termios {
     pub fn set_baud(&mut self, speed: libc::speed_t) {
         // SAFETY: `&mut self.0` is a valid termios to update.
         unsafe {
-            libc::cfsetispeed(&mut self.0, speed);
-            libc::cfsetospeed(&mut self.0, speed);
+            libc::cfsetispeed(&raw mut self.0, speed);
+            libc::cfsetospeed(&raw mut self.0, speed);
         }
     }
 

@@ -249,7 +249,7 @@ impl MimeDb {
                 if ncost > max_cost && max_cost != 0 {
                     continue;
                 }
-                let better = best.get(&c.dst).map_or(true, |(d, _)| ncost < *d);
+                let better = best.get(&c.dst).is_none_or(|(d, _)| ncost < *d);
                 if better {
                     let mut path = best[&cur].1.clone();
                     path.push(c);

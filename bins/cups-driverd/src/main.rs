@@ -78,6 +78,7 @@ fn arg1(rest: &str) -> String {
 
 /// Parse a `.drv` file into its model blocks. Directives before the first
 /// `ModelName` are shared context applied to every model in the file.
+#[allow(clippy::too_many_lines)]
 fn parse_drv(path: &Path, drv_root: &Path) -> Vec<DrvModel> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Vec::new();
@@ -332,6 +333,7 @@ fn media_size_points(name: &str) -> Option<(f64, f64)> {
 
 /// Emit a PPD for a parsed `.drv` model — the observable `ppdc` output shape:
 /// header + REQUIRED media/resolution keywords + option UIs + cupsFilter chain.
+#[allow(clippy::too_many_lines)]
 fn compile_ppd(m: &DrvModel) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();

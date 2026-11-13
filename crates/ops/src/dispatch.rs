@@ -1238,16 +1238,15 @@ fn cancel_job(req: &IppMessage, resp: &mut IppMessage, ctx: &Ctx, uri_attr: Opti
         let stopped = jr
             .for_printer(&dest)
             .find(|j| j.state == JobState::ProcessingStopped);
-        match active.or(stopped) {
-            Some(j) => id = j.id,
-            None => {
-                send_status(
-                    resp,
-                    status::ERROR_NOT_POSSIBLE,
-                    format!("No active jobs on {dest}."),
-                );
-                return;
-            }
+        if let Some(j) = active.or(stopped) {
+            id = j.id;
+        } else {
+            send_status(
+                resp,
+                status::ERROR_NOT_POSSIBLE,
+                format!("No active jobs on {dest}."),
+            );
+            return;
         }
         drop(jr);
     }
@@ -2393,7 +2392,7 @@ fn add_modify_printer(
                 }
                 let val = match a.values.first() {
                     Some(Value::Boolean(b)) => b.to_string(),
-                    Some(Value::Keyword(s)) | Some(Value::Text(s)) | Some(Value::Name(s)) => {
+                    Some(Value::Keyword(s) | Value::Text(s) | Value::Name(s)) => {
                         String::from_utf8_lossy(&s.0).into_owned()
                     }
                     Some(Value::Integer(i)) => i.to_string(),

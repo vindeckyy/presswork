@@ -42,7 +42,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: no unsafe outside crates/sys
         run: |
-          if grep -rln 'unsafe ' crates bins --include='*.rs' | grep -v 'crates/sys/'; then
+          if grep -rlnE 'unsafe[[:space:]]*(\{|\(|fn|impl|trait|extern)' crates bins --include='*.rs' | grep -v 'crates/sys/'; then
             echo 'unsafe outside sys' >&2; exit 1
           fi
 

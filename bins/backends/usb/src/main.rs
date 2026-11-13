@@ -210,7 +210,7 @@ fn main() {
                             return bc::code::RETRY;
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(_) => return bc::code::FAILED,
                 }
             }

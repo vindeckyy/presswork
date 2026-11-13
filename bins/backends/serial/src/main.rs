@@ -134,7 +134,7 @@ fn main() {
                             break;
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(_) => {
                         rc = bc::code::FAILED;
                         break;

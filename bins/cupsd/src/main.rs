@@ -53,7 +53,7 @@ fn parse_args() -> Result<Option<Args>, i32> {
         match s.as_ref() {
             "-c" => {
                 let p = it.next().map(PathBuf::from);
-                a.cupsd_conf = p.clone();
+                a.cupsd_conf.clone_from(&p);
                 a.server_root = p.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
             }
             "-s" => {
@@ -93,7 +93,7 @@ fn main() -> std::process::ExitCode {
 
     let mut paths = Paths::resolve(args.server_root.as_deref());
     if let Some(f) = &args.cupsd_conf {
-        paths.cupsd_conf = f.clone();
+        paths.cupsd_conf.clone_from(f);
     }
     let outcome = cups_config::load(&paths);
     emit_diagnostics(&outcome.diagnostics);

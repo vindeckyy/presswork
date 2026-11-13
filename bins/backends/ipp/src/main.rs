@@ -7,6 +7,7 @@
 //! hold/retry/stop the local job appropriately.
 
 use ipp_codec::{ops, tags, Attribute, Group, IppMessage, Text, Value};
+use rustls::pki_types::pem::PemObject;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
@@ -65,7 +66,7 @@ fn op_group(uri: &str) -> Group {
 /// Trust roots for `ipps://` — native OS roots plus every PEM in
 /// `{CUPS_SERVERROOT}/ssl` (upstream trusts the local cert store, which is
 /// where cupsd keeps its self-signed server cert).
-fn tls_config() -> Result<rustls::ClientConfig, String> {
+fn tls_config() -> rustls::ClientConfig {
     let mut roots = rustls::RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
     for c in native.certs {
@@ -81,16 +82,15 @@ fn tls_config() -> Result<rustls::ClientConfig, String> {
                 let Ok(data) = std::fs::read(&p) else {
                     continue;
                 };
-                use rustls::pki_types::pem::PemObject;
                 for c in rustls::pki_types::CertificateDer::pem_slice_iter(&data).flatten() {
                     let _ = roots.add(c);
                 }
             }
         }
     }
-    Ok(rustls::ClientConfig::builder()
+    rustls::ClientConfig::builder()
         .with_root_certificates(roots)
-        .with_no_client_auth())
+        .with_no_client_auth()
 }
 
 /// POST `msg` + `data` to the target; returns the decoded IPP reply.
@@ -105,19 +105,10 @@ fn ipp_send(t: &Target, msg: &IppMessage, data: &[u8]) -> Result<IppMessage, i32
     tcp.set_read_timeout(Some(Duration::from_secs(30))).ok();
 
     let raw = if t.tls {
-        let cfg = match tls_config() {
-            Ok(c) => c,
-            Err(e) => {
-                backend_common::error(format_args!("ipp: tls config: {e}"));
-                return Err(backend_common::code::FAILED);
-            }
-        };
-        let name = match rustls::pki_types::ServerName::try_from(t.host.clone()) {
-            Ok(n) => n,
-            Err(_) => {
-                backend_common::error(format_args!("ipp: bad hostname {}", t.host));
-                return Err(backend_common::code::FAILED);
-            }
+        let cfg = tls_config();
+        let Ok(name) = rustls::pki_types::ServerName::try_from(t.host.clone()) else {
+            backend_common::error(format_args!("ipp: bad hostname {}", t.host));
+            return Err(backend_common::code::FAILED);
         };
         let mut conn = match rustls::ClientConnection::new(std::sync::Arc::new(cfg), name) {
             Ok(c) => c,
