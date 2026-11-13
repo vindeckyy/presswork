@@ -18,7 +18,7 @@ jobs:
         # MSRV floor + current stable — distro build range.
         toolchain: ["1.88.0", stable]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
@@ -39,7 +39,7 @@ jobs:
     name: unsafe confined to sys
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: no unsafe outside crates/sys
         run: |
           if grep -rlnE 'unsafe[[:space:]]*(\{|\(|fn|impl|trait|extern)' crates bins --include='*.rs' | grep -v 'crates/sys/'; then
@@ -50,7 +50,7 @@ jobs:
     name: fuzz smoke (nightly)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: install cargo-fuzz
@@ -66,7 +66,7 @@ jobs:
     name: cargo audit + deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo audit
         run: |
@@ -83,7 +83,7 @@ jobs:
     env:
       IPPTESTS: /tmp/cups-ref/examples
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: build
