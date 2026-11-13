@@ -1,0 +1,36 @@
+# presswork cups-files.conf — filesystem/user settings (upstream: conf/cups-files.conf.in).
+# Paths match the FHS layout `make install` produces.
+
+# Account the scheduler runs as and the group that owns writable state.
+User lp
+Group lp
+
+# Groups granted admin rights by @SYSTEM in the default policy.
+# Debian/Ubuntu convention; upstream ships "sys root wheel".
+SystemGroup lpadmin
+
+# Configuration, state, and content trees.
+ServerRoot /etc/cups
+RequestRoot /var/spool/cups
+CacheDir /var/cache/cups
+StateDir /run/cups
+ServerBin /usr/lib/cups
+DataDir /usr/share/cups
+DocumentRoot /usr/share/cups/docroot
+
+# Printcap for legacy lpd clients.
+Printcap /run/cups/printcap
+PrintcapFormat bsd
+
+# Logs.
+AccessLog /var/log/cups/access_log
+ErrorLog /var/log/cups/error_log
+PageLog /var/log/cups/page_log
+
+# Sandboxing style for filters/backends (strict is only honored where the
+# platform supports it; relaxed is the upstream default).
+Sandboxing relaxed
+
+# Upstream ships FileDevice No: file:// URIs are convenient for testing but
+# let a queue write any file the scheduler can reach. Enable deliberately.
+FileDevice No

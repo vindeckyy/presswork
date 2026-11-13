@@ -98,12 +98,45 @@ bins/
 `presswork` is a working name; the installed binaries keep the CUPS
 names for drop-in compatibility.
 
-## Building
+## Install
+
+Prebuilt x86_64 Linux packages are attached to each
+[release](https://github.com/vindeckyy/presswork/releases):
 
 ```
-cargo build --workspace
-cargo test --workspace
+# Debian / Ubuntu (replaces stock cupsd via Provides/Conflicts)
+sudo dpkg -i presswork_0.1.0-1_amd64.deb
+
+# Any systemd distro, tarball:
+tar xzf presswork-0.1.0-x86_64-unknown-linux-gnu.tar.gz
+cd presswork-0.1.0 && sudo ./install.sh          # --no-start to install stopped
 ```
+
+The installer lands the upstream FHS layout (`/usr/sbin/cupsd`,
+`/usr/lib/cups/{daemon,backend,filter}`, `/etc/cups`,
+`/var/{spool,log,cache}/cups`), creates `lp`/`lpadmin`, and enables
+socket activation (`cups.socket` + `cups.path`, upstream's model).
+
+Verify: `lpstat -t`, then `lpadmin -p test -E -v ipp://<printer> -m
+everywhere` and `lp -d test /etc/hostname`. Because the wire, config
+files, and spool paths match CUPS 2.x, existing clients (`lp`, `lpq`,
+`lpstat`, `lpr`, `cancel`, `lpoptions`, `cups-lpd`, GNOME/KDE print
+dialogs) work unmodified. `docs/migration.md` covers swapping stock
+cupsd in and out; side-by-side evaluation on a nonstandard port is a
+three-line `cupsd.conf`.
+
+## Building
+
+Rust 1.88+:
+
+```
+cargo build --workspace --release
+cargo test --workspace
+sudo make install        # same FHS layout; respects DESTDIR/PREFIX
+```
+
+Distro packaging lives in `packaging/` (debian, rpm, arch, alpine, nix);
+`./scripts/dist.sh` reproduces the release artifacts.
 
 ## Compatibility
 
