@@ -750,26 +750,27 @@ pub fn read_cups_files_conf<R: BufRead>(
         } else if name.eq_ignore_ascii_case("SetEnv") && value.is_some() {
             let v = value.unwrap_or("");
             let mut parts = v.splitn(2, char::is_whitespace);
-            let var = parts.next().unwrap_or("");
-            let val = parts.next().map_or("", str::trim_start);
-            if val.is_empty() {
+            let env_name = parts.next().unwrap_or("");
+            let env_val = parts.next().map_or("", str::trim_start);
+            if env_val.is_empty() {
                 err!(
                     ln,
                     "Missing value for SetEnv directive on line {} of {}.",
                     ln,
                     filename
                 );
-            } else if PROHIBITED_ENV.contains(&var) {
+            } else if PROHIBITED_ENV.contains(&env_name) {
                 err!(
                     ln,
                     "Environment variable \"{}\" cannot be set  on line {} of {}.",
-                    var,
+                    env_name,
                     ln,
                     filename
                 );
                 fatal_if!(FatalErrors::CONFIG);
             } else {
-                cfg.set_env.push((var.to_string(), val.to_string()));
+                cfg.set_env
+                    .push((env_name.to_string(), env_val.to_string()));
             }
         } else if name.eq_ignore_ascii_case("SystemGroup") && value.is_some() {
             for gname in split_groups(value.unwrap_or("")) {

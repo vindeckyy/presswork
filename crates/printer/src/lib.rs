@@ -789,7 +789,11 @@ pub fn state_reasons_attr(p: &Printer) -> Attribute {
 /// uses `ippTimeToDate` which is local-time; UTC is the documented
 /// deviation for v1, logged in deviations.md).
 #[must_use]
-#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // bounded civil fields
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::similar_names
+)] // bounded civil fields
 pub fn ipp_datetime(epoch: i64) -> Value {
     // Civil-from-days algorithm (Howard Hinnant), avoiding libc gmtime.
     let days = epoch.div_euclid(86_400);

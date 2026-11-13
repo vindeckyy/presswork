@@ -15,7 +15,8 @@
     clippy::missing_panics_doc,
     clippy::struct_excessive_bools,
     clippy::ref_option,
-    clippy::format_push_string
+    clippy::format_push_string,
+    clippy::similar_names
 )]
 
 use ipp_codec::{ops::op, ops::status, tags, Attribute, IppMessage, Value};
