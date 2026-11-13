@@ -17,3 +17,9 @@ path = "../../../crates/backend-common"
 
 [dependencies.ipp-codec]
 path = "../../../crates/ipp-codec"
+
+[dependencies]
+rustls = "0.23.46"
+rustls-native-certs = "0.8"
+rustls-pemfile = "2"
+cups-tls = { path = "../../../crates/cups-tls" }

@@ -62,31 +62,75 @@ fn op_group(uri: &str) -> Group {
     g
 }
 
+/// Trust roots for `ipps://` — native OS roots plus every PEM in
+/// `{CUPS_SERVERROOT}/ssl` (upstream trusts the local cert store, which is
+/// where cupsd keeps its self-signed server cert).
+fn tls_config() -> Result<rustls::ClientConfig, String> {
+    let mut roots = rustls::RootCertStore::empty();
+    let native = rustls_native_certs::load_native_certs();
+    for c in native.certs {
+        let _ = roots.add(c);
+    }
+    let ssl = cups_tls::ssl_dir(&std::path::PathBuf::from(
+        std::env::var("CUPS_SERVERROOT").unwrap_or_else(|_| "/etc/cups".into()),
+    ));
+    if let Ok(rd) = std::fs::read_dir(&ssl) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "crt" || x == "pem") {
+                let Ok(data) = std::fs::read(&p) else {
+                    continue;
+                };
+                for c in rustls_pemfile::certs(&mut &data[..]).flatten() {
+                    let _ = roots.add(c);
+                }
+            }
+        }
+    }
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth())
+}
+
 /// POST `msg` + `data` to the target; returns the decoded IPP reply.
 fn ipp_send(t: &Target, msg: &IppMessage, data: &[u8]) -> Result<IppMessage, i32> {
     let mut body = ipp_codec::encode(msg).map_err(|_| backend_common::code::FAILED)?;
     body.extend_from_slice(data);
     let addr = format!("{}:{}", t.host, t.port);
-    let mut s = TcpStream::connect(&addr).map_err(|e| {
+    let mut tcp = TcpStream::connect(&addr).map_err(|e| {
         backend_common::error(format_args!("ipp: connect {addr}: {e}"));
         backend_common::code::FAILED
     })?;
-    s.set_read_timeout(Some(Duration::from_secs(30))).ok();
-    let req = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        t.resource,
-        addr,
-        body.len()
-    );
-    s.write_all(req.as_bytes())
-        .and_then(|()| s.write_all(&body))
-        .map_err(|e| {
-            backend_common::error(format_args!("ipp: send: {e}"));
-            backend_common::code::FAILED
-        })?;
-    let mut raw = Vec::new();
-    s.read_to_end(&mut raw)
-        .map_err(|_| backend_common::code::FAILED)?;
+    tcp.set_read_timeout(Some(Duration::from_secs(30))).ok();
+
+    let raw = if t.tls {
+        let cfg = match tls_config() {
+            Ok(c) => c,
+            Err(e) => {
+                backend_common::error(format_args!("ipp: tls config: {e}"));
+                return Err(backend_common::code::FAILED);
+            }
+        };
+        let name = match rustls::pki_types::ServerName::try_from(t.host.clone()) {
+            Ok(n) => n,
+            Err(_) => {
+                backend_common::error(format_args!("ipp: bad hostname {}", t.host));
+                return Err(backend_common::code::FAILED);
+            }
+        };
+        let mut conn = match rustls::ClientConnection::new(std::sync::Arc::new(cfg), name) {
+            Ok(c) => c,
+            Err(e) => {
+                backend_common::error(format_args!("ipp: tls connect {addr}: {e}"));
+                return Err(backend_common::code::FAILED);
+            }
+        };
+        let mut s = rustls::Stream::new(&mut conn, &mut tcp);
+        http_round_trip(&mut s, t, &body)?
+    } else {
+        http_round_trip(&mut tcp, t, &body)?
+    };
+
     let end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -95,6 +139,39 @@ fn ipp_send(t: &Target, msg: &IppMessage, data: &[u8]) -> Result<IppMessage, i32
     ipp_codec::decode(&raw[end..])
         .map(|(m, _)| m)
         .map_err(|_| backend_common::code::FAILED)
+}
+
+fn http_round_trip(s: &mut (impl Read + Write), t: &Target, body: &[u8]) -> Result<Vec<u8>, i32> {
+    let req = format!(
+        "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        t.resource,
+        t.host,
+        t.port,
+        body.len()
+    );
+    s.write_all(req.as_bytes())
+        .and_then(|()| s.write_all(body))
+        .map_err(|e| {
+            backend_common::error(format_args!("ipp: send: {e}"));
+            backend_common::code::FAILED
+        })?;
+    let mut raw = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        match s.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&buf[..n]),
+            // A peer that closes the TCP/TLS session without `close_notify`
+            // still delivered a complete HTTP response — upstream tolerates
+            // the same abrupt close.
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                backend_common::error(format_args!("ipp: read response: {e}"));
+                return Err(backend_common::code::FAILED);
+            }
+        }
+    }
+    Ok(raw)
 }
 
 fn main() {
@@ -136,12 +213,6 @@ fn print(_argv: &[String], inv: &backend_common::Invocation) -> i32 {
         backend_common::error(format_args!("ipp: bad device-uri {}", inv.device_uri));
         return backend_common::code::FAILED;
     };
-    if target.tls {
-        backend_common::error(format_args!(
-            "ipp: ipps:// transport not yet wired (use ipp:// or a TLS listener)"
-        ));
-        return backend_common::code::FAILED;
-    }
     let mut doc = match backend_common::document(inv) {
         Ok(d) => d,
         Err(e) => {

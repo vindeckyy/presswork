@@ -54,6 +54,11 @@ Listen localhost:$PWPORT
 Listen $PWROOT/run/cups.sock
 DefaultShared yes
 MaxSubscriptions 3
+<Policy default>
+<Limit All>
+Order Allow,Deny
+</Limit>
+</Policy>
 EOF
     cat > "$PWROOT/etc/printers.conf" <<EOF
 # Printer configuration file for CUPS
@@ -115,6 +120,10 @@ stop() {
 
 restart() {
     stop
+    # Purge persisted job control files — CUPS-correct restart behavior keeps
+    # them, but leftover `pending-held` seeds from a previous/interrupted run
+    # absorb `cancel-current-job` and leak into ipp-1.1's completion polling.
+    rm -f "$PWROOT/spool"/c[0-9]* "$PWROOT/spool"/d[0-9]*
     cargo build --bin cupsd
     cp target/debug/cupsd "$PWROOT/cupsd"
     ( cd "$PWROOT" && setsid ./cupsd -c etc/cupsd.conf -f > logs/stdout.log 2>&1 </dev/null & )
@@ -137,6 +146,25 @@ run() {
         ipp-1.1 ipp-2.0 ipp-2.1 ipp-2.2 ipp-everywhere
     )
     printf 'x' > /tmp/pw-conf-doc.txt
+    # Clear non-final jobs persisted from earlier runs — a leftover
+    # `pending-held` seed would absorb `cancel-current-job` and leak into
+    # ipp-1.1's completion polling (Cancel-Jobs on the /printers URI covers
+    # every queue, matching upstream's Purge-Jobs harness cleanup).
+    cat > /tmp/pw-conf-purge.test <<'EOF'
+{
+    NAME "purge non-final jobs"
+    OPERATION Cancel-Jobs
+    GROUP operation-attributes-tag
+    ATTR charset attributes-charset utf-8
+    ATTR language attributes-natural-language en
+    ATTR uri printer-uri $uri
+    ATTR name requesting-user-name $user
+    ATTR boolean my-jobs false
+    ATTR boolean purge-jobs true
+    STATUS *
+}
+EOF
+    ipptool -tv -f /tmp/pw-conf-doc.txt "ipp://localhost:$PWPORT/printers" /tmp/pw-conf-purge.test >/dev/null 2>&1 || true
     # Seed a pending job so `cancel-current-job`'s `Get-Jobs` always has a
     # `not-completed` job to find — a `Create-Job` with no `Send-Document`
     # stays `pending-held`/`job-data-insufficient` (the file backend would
@@ -191,9 +219,11 @@ EOF
         # snapshot printers.conf and restore afterward so the examples
         # matrix's queue set stays deterministic across runs.
         cp "$PWROOT/etc/printers.conf" "$PWROOT/etc/printers.conf.bak" 2>/dev/null || true
-        local enc root_uri
-        enc=$(printf '%s' "$PWROOT" | sed 's|/|%2F|g')
-        root_uri="ipp://$enc%2Frun%2Fcups.sock/printers/tlsq"
+        # Upstream's harness targets TCP `ipp://localhost:port/printers`
+        # (run-stp-tests.sh:730) with the all-allow test policy above —
+        # not the socket — matching it keeps this tier directly diffable
+        # against stock cupsd in scripts/differential.sh.
+        local root_uri="ipp://localhost:$PWPORT/printers"
         for t in 4.1-requests 4.2-cups-printer-ops 4.3-job-ops 4.4-subscription-ops; do
             [ -f "$TESTDIR/$t.test" ] || { echo "SKIP test/$t"; skip=$((skip+1)); continue; }
             rc=0; verdict "test/$t" "$root_uri" "$TESTDIR/$t.test" || rc=$?

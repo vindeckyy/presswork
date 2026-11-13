@@ -62,12 +62,14 @@ pub enum OrderType {
 }
 
 /// `CUPSD_AUTH_SATISFY_*` — whether host rules AND auth rules must hold.
+/// Upstream's default is `Any` (`CUPSD_AUTH_SATISFY_ANY`); only an explicit
+/// `Satisfy all` directive requires both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Satisfy {
     /// Both address and authentication must succeed.
-    #[default]
     All,
-    /// Either suffices.
+    /// Either suffices — upstream default.
+    #[default]
     Any,
 }
 
