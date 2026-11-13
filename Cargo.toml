@@ -48,6 +48,10 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0 OR MIT"
+repository = "https://github.com/vindeckyy/presswork"
+homepage = "https://vindeckyy.github.io/presswork/"
+keywords = ["cups", "ipp", "printing", "print-server", "spooler"]
+categories = ["network-programming", "os::linux-apis", "command-line-utilities"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

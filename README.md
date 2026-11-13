@@ -6,9 +6,11 @@
 [![Conformance](https://img.shields.io/badge/upstream%20conformance-34%2F0%2F1-brightgreen)](docs/conformance.md)
 
 A memory-safe **CUPS replacement in Rust**: a drop-in `cupsd` print
-server and print spooler that speaks the IPP protocol to every
-application, driverless IPP Everywhere printer, and AirPrint client on
-your network.
+server and print spooler for Linux that speaks the IPP (Internet
+Printing Protocol) to every application, driverless IPP Everywhere
+printer, and AirPrint client on your network. If you are looking for a
+secure, maintained CUPS alternative for the Common UNIX Printing
+System, this is it.
 
 **Status:** upstream conformance green - `test/4.x` + `examples/`
 matrix 34 passed / 0 failed / 1 skipped, `test/5.x` stock-client suite
