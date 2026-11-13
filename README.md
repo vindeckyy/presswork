@@ -3,6 +3,7 @@
 [![CI](https://github.com/vindeckyy/presswork/actions/workflows/ci.yml/badge.svg)](https://github.com/vindeckyy/presswork/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](LICENSE-APACHE)
 [![MSRV](https://img.shields.io/badge/rust-1.88%2B-orange)](Cargo.toml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vindeckyy/presswork/badge)](https://scorecard.dev/viewer/?uri=github.com/vindeckyy/presswork)
 [![Conformance](https://img.shields.io/badge/upstream%20conformance-34%2F0%2F1-brightgreen)](docs/conformance.md)
 
 A memory-safe **CUPS replacement in Rust**: a drop-in `cupsd` print
@@ -151,6 +152,40 @@ Distro packaging lives in `packaging/` (debian, rpm, arch, alpine, nix);
 Target: CUPS 2.5 semantics on Linux (macOS tier-2). Divergences are
 documented in `docs/deviations.md` once they exist - the goal is none
 you can observe without reading the source.
+
+## FAQ
+
+**Can presswork replace cupsd on a running system?**
+That is the design goal. It reads `/etc/cups/*` in place, keeps your
+queues and spool, and serves the same IPP socket every client already
+uses. `docs/migration.md` walks the swap; the `.deb` declares
+`Provides: cups` so the package manager treats it as the same service.
+
+**Do GNOME/KDE print dialogs, `lp`, `lpr`, Firefox, and macOS clients
+still work?**
+Yes - they all speak IPP to `localhost:631` or the domain socket, which
+is unchanged. The upstream `test/5.x` client suite passes 34/34 against
+presswork using unmodified stock binaries.
+
+**Does it do AirPrint / driverless printing?**
+Yes. Driverless IPP Everywhere is the primary path (`lpadmin -m
+everywhere` or `-m driverless`), with DNS-SD advertising for AirPrint
+discovery. PPD-based legacy drivers and `.drv` compilers work too.
+
+**Does it work alongside stock CUPS?**
+For evaluation, yes: point `cupsd` at a scratch config on another port
+(`Listen localhost:8631`), no system changes needed. The brew tap
+install does exactly this on port 8631.
+
+**Why not use ipp-rs / ipp-client / ipp-printer-app?**
+Those are client and printer-embodiment crates - they talk *to* a
+printer or pretend to *be* one. presswork implements the scheduler in
+the middle: queues, jobs, filters, policy. It is the part nothing else
+in the Rust ecosystem provides.
+
+**Is this affiliated with OpenPrinting/CUPS?**
+No. presswork is an independent implementation of the IPP protocols and
+CUPS file formats, license-clean under Apache-2.0 OR MIT.
 
 ## License
 

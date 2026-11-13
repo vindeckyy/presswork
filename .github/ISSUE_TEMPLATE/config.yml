@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussion
+    url: https://github.com/vindeckyy/presswork/discussions
+    about: Usage questions, setup help, and design discussion
+  - name: Documentation
+    url: https://vindeckyy.github.io/presswork/
+    about: Conformance matrix, migration guide, and security model
