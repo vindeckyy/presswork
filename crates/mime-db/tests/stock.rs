@@ -2,7 +2,7 @@ use mime_db::MimeDb;
 use std::path::PathBuf;
 
 fn db() -> MimeDb {
-    MimeDb::load(&PathBuf::from("/tmp/mt")).unwrap()
+    MimeDb::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")).unwrap()
 }
 
 #[test]
