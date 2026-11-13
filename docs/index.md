@@ -33,6 +33,7 @@ build from source with `cargo build --release && sudo make install`.
 
 ## Documentation
 
+- [Installation guide](install.md)
 - [0.1.0 announcement](announce-0.1.0.md)
 - [Conformance matrix and methodology](conformance.md)
 - [Migrating from stock CUPS](migration.md)

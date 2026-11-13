@@ -18,6 +18,11 @@ matrix 34 passed / 0 failed / 1 skipped, `test/5.x` stock-client suite
 34/34. See [`docs/conformance.md`](docs/conformance.md) for the full
 evidence matrix and methodology.
 
+**Contents**: [What this is](#what-this-is) · [Features](#features) ·
+[Why a rewrite](#why-a-rewrite) · [Install](#install) ·
+[Compatibility](#compatibility) · [FAQ](#faq) ·
+[License](#license)
+
 ## What this is
 
 Rust IPP crates today let applications *talk to* printers or build
