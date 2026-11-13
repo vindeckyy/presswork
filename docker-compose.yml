@@ -1,0 +1,16 @@
+# `docker compose up` evaluates presswork without touching a host
+# CUPS install: cupsd on 631 with persistent config, spool, and logs.
+services:
+  cupsd:
+    image: ghcr.io/vindeckyy/presswork:latest
+    ports:
+      - "631:631"
+    volumes:
+      - cups-etc:/etc/cups
+      - cups-spool:/var/spool/cups
+      - cups-log:/var/log/cups
+
+volumes:
+  cups-etc:
+  cups-spool:
+  cups-log:

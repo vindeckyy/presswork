@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: presswork
+message: If you use this software, please cite it as below.
+type: software
+authors:
+  - name: vindeckyy
+abstract: >-
+  A memory-safe, drop-in replacement for the CUPS print spooler and
+  scheduler (cupsd) written in Rust. Implements the IPP wire protocol,
+  /etc/cups configuration, spool layout, and filter/backend process
+  contract so existing print clients and drivers work unmodified.
+keywords:
+  - printing
+  - cups
+  - ipp
+  - print spooler
+  - rust
+license: Apache-2.0 OR MIT
+repository-code: https://github.com/vindeckyy/presswork
+version: 0.1.0
+date-released: "2026-11-12"

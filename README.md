@@ -126,6 +126,18 @@ Prefer a package or the manual path? Each
 brew install vindeckyy/tap/presswork && brew services start presswork
 ```
 
+### Container (zero-touch eval)
+
+```sh
+docker run -d -p 631:631 \
+  -v cups-etc:/etc/cups -v cups-spool:/var/spool/cups \
+  ghcr.io/vindeckyy/presswork:latest
+```
+
+or `docker compose up` with the shipped `docker-compose.yml`. The
+image runs cupsd in the foreground with persistent volumes for
+queues, spool, and logs - nothing is installed on the host.
+
 Verify: `lpstat -t`, then `lpadmin -p test -E -v ipp://<printer> -m
 everywhere` and `lp -d test /etc/hostname`. Because the wire, config
 files, and spool paths match CUPS 2.x, existing clients (`lp`, `lpq`,
