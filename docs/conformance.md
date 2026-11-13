@@ -86,6 +86,22 @@ lapsed leases are *removed* on `Get-Subscriptions`/
 subscriptions are deleted when the job leaves the active list
 (`cupsdExpireSubscriptions(NULL, job)`).
 
+## Client tier — upstream `test/5.x` shell suite, all green
+
+The `5.x` scripts run **stock system clients** against the domain socket
+(`CUPS_SERVER=/tmp/pw-conf/run/cups.sock`, `SO_PEERCRED` auth,
+`CUPS_SERVERROOT=$PWROOT/etc`, `IPP_PORT=8631`, queues `Test1`/`Test2`
+pre-provisioned): `5.1-lpadmin` 10/10, `5.2-lpc` 1/1, `5.3-lpq` 1/1,
+`5.4-lpstat` 3/3, `5.5-lp` 7/7, `5.6-lpr` 4/4, `5.7-lprm` 2/2,
+`5.8-cancel` 3/3, `5.9-lpinfo` 3/3 — **34/34**.
+
+Semantics this pins down: queue PPDs persist to
+`{ServerRoot}/ppd/<name>.ppd` (uploaded body or `ppd-name` via
+cups-driverd; deleted with the queue; `lpadmin -o cups*=` patches
+keywords in place); `Cancel-Job`+`printer-uri`+`job-id=0` cancels the
+first active (then stopped) job on the dest; `lpinfo -v` enumerates the
+backend scheme listings.
+
 ## RFC / PWG suites — all green
 
 `ipp-1.1`, `ipp-2.0`, `ipp-2.1`, `ipp-2.2`, `ipp-everywhere` each pass

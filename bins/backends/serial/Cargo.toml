@@ -13,3 +13,5 @@ name = "serial"
 path = "src/main.rs"
 
 [dependencies]
+backend-common = { path = "../../../crates/backend-common" }
+sys = { path = "../../../crates/sys" }

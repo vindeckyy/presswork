@@ -185,14 +185,24 @@ dependencies = [
 [[package]]
 name = "cups-backend-parallel"
 version = "0.1.0"
+dependencies = [
+ "backend-common",
+]
 
 [[package]]
 name = "cups-backend-serial"
 version = "0.1.0"
+dependencies = [
+ "backend-common",
+ "sys",
+]
 
 [[package]]
 name = "cups-backend-snmp"
 version = "0.1.0"
+dependencies = [
+ "backend-common",
+]
 
 [[package]]
 name = "cups-backend-socket"
@@ -204,6 +214,9 @@ dependencies = [
 [[package]]
 name = "cups-backend-usb"
 version = "0.1.0"
+dependencies = [
+ "backend-common",
+]
 
 [[package]]
 name = "cups-config"
