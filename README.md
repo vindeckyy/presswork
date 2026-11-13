@@ -100,22 +100,23 @@ names for drop-in compatibility.
 
 ## Install
 
-Prebuilt x86_64 Linux packages are attached to each
-[release](https://github.com/vindeckyy/presswork/releases):
+One command, x86_64 Linux:
 
 ```
-# Debian / Ubuntu (replaces stock cupsd via Provides/Conflicts)
-sudo dpkg -i presswork_0.1.0-1_amd64.deb
-
-# Any systemd distro, tarball:
-tar xzf presswork-0.1.0-x86_64-unknown-linux-gnu.tar.gz
-cd presswork-0.1.0 && sudo ./install.sh          # --no-start to install stopped
+curl -fsSL https://raw.githubusercontent.com/vindeckyy/presswork/main/install.sh | sh
 ```
 
-The installer lands the upstream FHS layout (`/usr/sbin/cupsd`,
+The installer resolves the latest release, verifies its SHA256SUMS
+entry, lands the upstream FHS layout (`/usr/sbin/cupsd`,
 `/usr/lib/cups/{daemon,backend,filter}`, `/etc/cups`,
 `/var/{spool,log,cache}/cups`), creates `lp`/`lpadmin`, and enables
 socket activation (`cups.socket` + `cups.path`, upstream's model).
+Flags: `--no-start`, `--version X`, `--from DIR`, `--force`.
+
+Prefer a package or the manual path? Each
+[release](https://github.com/vindeckyy/presswork/releases) also ships a
+`.deb` (`sudo dpkg -i presswork_0.1.0-1_amd64.deb`, declared
+`Conflicts: cups,cups-daemon`) and the raw FHS tarball.
 
 Verify: `lpstat -t`, then `lpadmin -p test -E -v ipp://<printer> -m
 everywhere` and `lp -d test /etc/hostname`. Because the wire, config
