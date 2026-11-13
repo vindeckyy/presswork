@@ -1,7 +1,14 @@
 # presswork
 
-A memory-safe, drop-in replacement for the CUPS 2.x print scheduler -
-`cupsd` and the printing stack - written in Rust.
+[![CI](https://github.com/vindeckyy/presswork/actions/workflows/ci.yml/badge.svg)](https://github.com/vindeckyy/presswork/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](LICENSE-APACHE)
+[![MSRV](https://img.shields.io/badge/rust-1.88%2B-orange)](Cargo.toml)
+[![Conformance](https://img.shields.io/badge/upstream%20conformance-34%2F0%2F1-brightgreen)](docs/conformance.md)
+
+A memory-safe **CUPS replacement in Rust**: a drop-in `cupsd` print
+server and print spooler that speaks the IPP protocol to every
+application, driverless IPP Everywhere printer, and AirPrint client on
+your network.
 
 **Status:** upstream conformance green - `test/4.x` + `examples/`
 matrix 34 passed / 0 failed / 1 skipped, `test/5.x` stock-client suite
@@ -26,6 +33,28 @@ system today:
  - existing `cups-filters` and third-party backends work unchanged
 - Same DNS-SD sharing (`_ipp._tcp` etc.) and D-Bus notifier signals
 - Same stock CGI web interface, served by exec'ing the stock CGIs
+
+## Features
+
+- **IPP server** - the full CUPS 2.x operation set (50+ ops): print,
+  hold, release, cancel, subscriptions with lease semantics, push/pull
+  event notifications
+- **Print spooler & scheduler** - permanent queues, job state machine,
+  spool persistence across restarts, quota and policy engine
+- **Driverless printing** - IPP Everywhere / driverless-IPP attribute
+  synthesis; PPD-based legacy drivers work too (`.drv`, `ppd-name`,
+  `lpadmin -o cups*=`)
+- **Print backends** - `socket`, `ipp`/`ipps` (rustls), `lpd`, `dnssd`,
+  `usb`, `parallel`, `serial`, `snmp` discovery, plus third-party
+  CUPS backends unchanged
+- **Sharing & discovery** - AirPrint/mDNS (`_ipp._tcp`), Bonjour TXT
+  records, D-Bus signals, `cups-lpd` for RFC 1179 clients
+- **Drop-in config** - `cupsd.conf`, `printers.conf`, `subscriptions.conf`
+  parsed with upstream semantics; `<Policy>`/`<Location>` auth,
+  `SO_PEERCRED`, TLS via `SSLPort`/`SSLOptions`
+- **Security by construction** - `#![forbid(unsafe_code)]` outside one
+  audited `sys` crate; cargo-fuzz on every wire parser; `cargo audit`
+  clean; systemd sandboxing
 
 ## Why a rewrite
 
