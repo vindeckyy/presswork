@@ -1,9 +1,9 @@
-Name:           presswork
+Name:           yindle
 Version:        0.1.0
 Release:        1%{?dist}
 Summary:        Memory-safe CUPS-compatible print spooler and IPP scheduler
 License:        MIT AND Apache-2.0
-URL:            https://example.invalid/presswork
+URL:            https://example.invalid/yindle
 Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  cargo
@@ -15,7 +15,7 @@ Provides:       cups
 Conflicts:      cups
 
 %description
-presswork is a from-scratch reimplementation of the CUPS 2.x print
+yindle is a from-scratch reimplementation of the CUPS 2.x print
 spooler and IPP scheduler in Rust — driverless IPP first, with a PPD /
 legacy-driver layer for parity. It speaks the same IPP on the same
 sockets, reads /etc/cups config in place, and keeps the same
@@ -72,5 +72,5 @@ chmod 0700 /etc/cups/ssl 2>/dev/null || :
 %config %{_pamdir}/cups
 
 %changelog
-* Wed Nov 12 2025 presswork contributors <presswork@example.invalid> - 0.1.0-1
+* Wed Nov 12 2025 yindle contributors <yindle@example.invalid> - 0.1.0-1
 - Initial package

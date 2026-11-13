@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 
-name="CUPS Scheduler (presswork)"
+name="CUPS Scheduler (yindle)"
 description="print spooler and IPP scheduler"
 command="/usr/sbin/cupsd"
 command_args="-f"

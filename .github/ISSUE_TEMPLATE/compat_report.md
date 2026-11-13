@@ -8,7 +8,7 @@ labels: compatibility
 **Stock CUPS behavior** (version, distro):
 <!-- what stock cupsd does -->
 
-**presswork behavior**:
+**yindle behavior**:
 
 **How to reproduce** (config, client command, ipptool file, or packet capture):
 

@@ -1,4 +1,4 @@
-# presswork cupsd.conf — scheduler settings (upstream: conf/cupsd.conf.in).
+# yindle cupsd.conf — scheduler settings (upstream: conf/cupsd.conf.in).
 # Directives match upstream 2.x syntax; unknown ones warn and are ignored.
 
 LogLevel warn

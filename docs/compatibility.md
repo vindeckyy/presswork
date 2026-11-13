@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-Where presswork stands against the CUPS 2.x surface it replaces. The
+Where yindle stands against the CUPS 2.x surface it replaces. The
 authoritative evidence is `docs/conformance.md` (per-test results against
 the upstream `ipptool` suite) and `docs/deviations.md` (intentional
 non-matches).

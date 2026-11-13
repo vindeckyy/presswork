@@ -1,9 +1,9 @@
-# presswork
+# yindle
 
-[![CI](https://github.com/vindeckyy/presswork/actions/workflows/ci.yml/badge.svg)](https://github.com/vindeckyy/presswork/actions/workflows/ci.yml)
+[![CI](https://github.com/vindeckyy/yindle/actions/workflows/ci.yml/badge.svg)](https://github.com/vindeckyy/yindle/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](LICENSE-APACHE)
 [![MSRV](https://img.shields.io/badge/rust-1.88%2B-orange)](Cargo.toml)
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vindeckyy/presswork/badge)](https://scorecard.dev/viewer/?uri=github.com/vindeckyy/presswork)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/vindeckyy/yindle/badge)](https://scorecard.dev/viewer/?uri=github.com/vindeckyy/yindle)
 [![Conformance](https://img.shields.io/badge/upstream%20conformance-34%2F0%2F1-brightgreen)](docs/conformance.md)
 
 A memory-safe **CUPS replacement in Rust**: a drop-in `cupsd` print
@@ -28,7 +28,7 @@ evidence matrix and methodology.
 Rust IPP crates today let applications *talk to* printers or build
 printer applications. Nothing implements the local print spooler that
 applications submit jobs to: queue management, job scheduling, the
-filter/backend pipeline, permissions and policy. presswork builds that -
+filter/backend pipeline, permissions and policy. yindle builds that -
 byte-compatible with the `cupsd` that exists on every Linux and macOS
 system today:
 
@@ -70,7 +70,7 @@ Every byte from the network, every IPP attribute, every generated PPD is
 parsed by a strictly-typed, fuzzed codec with `#![forbid(unsafe_code)]`.
 The September 2024 CUPS chain (CVE-2024-47176 et al.) demonstrated remote
 unauthenticated command injection through the C print stack's parsers;
-the entire exposed surface is what presswork replaces. Filters and
+the entire exposed surface is what yindle replaces. Filters and
 backends additionally run under Linux sandboxing (Landlock/seccomp)
 beyond what the C scheduler can express.
 
@@ -103,7 +103,7 @@ bins/
  backends/ socket ipp lpd snmp usb dnssd serial parallel
 ```
 
-`presswork` is a working name; the installed binaries keep the CUPS
+`yindle` is a working name; the installed binaries keep the CUPS
 names for drop-in compatibility.
 
 ## Install
@@ -111,7 +111,7 @@ names for drop-in compatibility.
 One command, x86_64 Linux:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/vindeckyy/presswork/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vindeckyy/yindle/main/install.sh | sh
 ```
 
 The installer resolves the latest release, verifies its SHA256SUMS
@@ -122,13 +122,13 @@ socket activation (`cups.socket` + `cups.path`, upstream's model).
 Flags: `--no-start`, `--version X`, `--from DIR`, `--force`.
 
 Prefer a package or the manual path? Each
-[release](https://github.com/vindeckyy/presswork/releases) also ships a
-`.deb` (`sudo dpkg -i presswork_0.1.0-1_amd64.deb`, declared
+[release](https://github.com/vindeckyy/yindle/releases) also ships a
+`.deb` (`sudo dpkg -i yindle_0.1.0-1_amd64.deb`, declared
 `Conflicts: cups,cups-daemon`) and the raw FHS tarball.
 
 ```
 # Homebrew on Linux (user-space eval on port 8631):
-brew install vindeckyy/tap/presswork && brew services start presswork
+brew install vindeckyy/tap/yindle && brew services start yindle
 ```
 
 ### Container (zero-touch eval)
@@ -136,7 +136,7 @@ brew install vindeckyy/tap/presswork && brew services start presswork
 ```sh
 docker run -d -p 631:631 \
   -v cups-etc:/etc/cups -v cups-spool:/var/spool/cups \
-  ghcr.io/vindeckyy/presswork:latest
+  ghcr.io/vindeckyy/yindle:latest
 ```
 
 or `docker compose up` with the shipped `docker-compose.yml`. The
@@ -172,7 +172,7 @@ you can observe without reading the source.
 
 ## FAQ
 
-**Can presswork replace cupsd on a running system?**
+**Can yindle replace cupsd on a running system?**
 That is the design goal. It reads `/etc/cups/*` in place, keeps your
 queues and spool, and serves the same IPP socket every client already
 uses. `docs/migration.md` walks the swap; the `.deb` declares
@@ -182,7 +182,7 @@ uses. `docs/migration.md` walks the swap; the `.deb` declares
 still work?**
 Yes - they all speak IPP to `localhost:631` or the domain socket, which
 is unchanged. The upstream `test/5.x` client suite passes 34/34 against
-presswork using unmodified stock binaries.
+yindle using unmodified stock binaries.
 
 **Does it do AirPrint / driverless printing?**
 Yes. Driverless IPP Everywhere is the primary path (`lpadmin -m
@@ -196,16 +196,16 @@ install does exactly this on port 8631.
 
 **Why not use ipp-rs / ipp-client / ipp-printer-app?**
 Those are client and printer-embodiment crates - they talk *to* a
-printer or pretend to *be* one. presswork implements the scheduler in
+printer or pretend to *be* one. yindle implements the scheduler in
 the middle: queues, jobs, filters, policy. It is the part nothing else
 in the Rust ecosystem provides.
 
 **Is this affiliated with OpenPrinting/CUPS?**
-No. presswork is an independent implementation of the IPP protocols and
+No. yindle is an independent implementation of the IPP protocols and
 CUPS file formats, license-clean under Apache-2.0 OR MIT.
 
 ## License
 
-Apache-2.0 OR MIT. `presswork` is an independent implementation of the
+Apache-2.0 OR MIT. `yindle` is an independent implementation of the
 IPP protocols and CUPS file formats; where algorithms are ported from
 upstream CUPS (Apache-2.0), attribution is retained.

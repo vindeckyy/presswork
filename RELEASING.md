@@ -1,20 +1,20 @@
-# Releasing presswork
+# Releasing yindle
 
 The release pipeline is tag-driven; cutting a release is two commands:
 
 ```sh
-git tag -a vX.Y.Z -m "presswork X.Y.Z"
+git tag -a vX.Y.Z -m "yindle X.Y.Z"
 git push origin vX.Y.Z
 ```
 
 ## What happens automatically
 
 1. `.github/workflows/release.yml` builds `scripts/dist.sh` and attaches
-   `presswork-X.Y.Z-<target>.tar.gz`, `presswork_X.Y.Z-1_amd64.deb`, and
+   `yindle-X.Y.Z-<target>.tar.gz`, `yindle_X.Y.Z-1_amd64.deb`, and
    `SHA256SUMS` to a new GitHub release, with notes extracted from the
    matching `CHANGELOG.md` section.
 2. `.github/workflows/publish.yml` publishes the crates.io crates in
-   dependency order (`ipp-codec`, `presswork-sys`, `backend-common`,
+   dependency order (`ipp-codec`, `yindle-sys`, `backend-common`,
    `cups-tls`, `cups-log`, `cups-config`), skipping versions that are
    already uploaded. The job reads the `CARGO_REGISTRY_TOKEN` repository
    secret, a crates.io API token with publish permission.
@@ -38,10 +38,10 @@ git push origin vX.Y.Z
 
 - **GitHub release assets** - built by CI on every tag.
 - **crates.io** - publish.yml, above.
-- **Homebrew** - `vindeckyy/homebrew-tap`, `Formula/presswork.rb`.
+- **Homebrew** - `vindeckyy/homebrew-tap`, `Formula/yindle.rb`.
   Bump `url`/`sha256` to the new tarball per release.
-- **AUR** - `packaging/aur-bin/` is a ready-to-push `presswork-bin`
-  repo; `packaging/arch/PKGBUILD` is the `presswork` source package.
+- **AUR** - `packaging/aur-bin/` is a ready-to-push `yindle-bin`
+  repo; `packaging/arch/PKGBUILD` is the `yindle` source package.
   Bump `pkgver` + `sha256sums`, `updpkgsums`, `makepkg --printsrcinfo`.
 - **nixpkgs** - `packaging/nix/package.nix` is the upstream-ready
   derivation (submitted as NixOS/nixpkgs#587503).
@@ -51,7 +51,7 @@ git push origin vX.Y.Z
 ### Curated-list submissions (eligibility-gated)
 
 - **awesome-rust** requires >50 stars or >2000 crates.io downloads -
-  submit `vindeckyy/presswork` under "System tools" once the gate is met.
+  submit `vindeckyy/yindle` under "System tools" once the gate is met.
 - **awesome-selfhosted** requires the first tagged release to be 4+
   months old (eligible ~2026-03-12) and a human submitter - entries are
   YAML files in the awesome-selfhosted-data repo under a suitable tag.

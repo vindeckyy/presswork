@@ -14,4 +14,4 @@ path = "src/main.rs"
 
 [dependencies]
 backend-common = { path = "../../../crates/backend-common" }
-sys = { path = "../../../crates/sys", package = "presswork-sys" }
+sys = { path = "../../../crates/sys", package = "yindle-sys" }

@@ -1,6 +1,6 @@
 [package]
-name = "presswork-sys"
-description = "Unsafe-confined system FFI for the presswork CUPS-compatible scheduler: privilege drop, fd plumbing, rlimits, exec, syslog"
+name = "yindle-sys"
+description = "Unsafe-confined system FFI for the yindle CUPS-compatible scheduler: privilege drop, fd plumbing, rlimits, exec, syslog"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -31,7 +31,7 @@ name = "cups-config"
 version = "0.1.0"
 dependencies = [
  "ipp-codec",
- "sys",
+ "yindle-sys",
 ]
 
 [[package]]
@@ -86,17 +86,6 @@ name = "mime-db"
 version = "0.1.0"
 
 [[package]]
-name = "presswork-fuzz"
-version = "0.1.0"
-dependencies = [
- "cups-config",
- "ipp-codec",
- "libfuzzer-sys",
- "mime-db",
- "printer",
-]
-
-[[package]]
 name = "printer"
 version = "0.1.0"
 dependencies = [
@@ -147,13 +136,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sys"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
-
-[[package]]
 name = "thiserror"
 version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -178,3 +160,21 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "yindle-fuzz"
+version = "0.1.0"
+dependencies = [
+ "cups-config",
+ "ipp-codec",
+ "libfuzzer-sys",
+ "mime-db",
+ "printer",
+]
+
+[[package]]
+name = "yindle-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]

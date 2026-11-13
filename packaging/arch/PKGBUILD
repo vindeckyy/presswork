@@ -1,17 +1,17 @@
 # Maintainer: vindeckyy <https://github.com/vindeckyy>
-pkgname=presswork
+pkgname=yindle
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="A memory-safe, CUPS 2.x-compatible print spooler and IPP scheduler in Rust (driverless-first)"
 arch=('x86_64' 'aarch64')
-url="https://github.com/vindeckyy/presswork"
+url="https://github.com/vindeckyy/yindle"
 license=('MIT' 'Apache-2.0')
 depends=('glibc' 'gcc-libs' 'avahi')
 makedepends=('cargo' 'rust')
 provides=('cups')
 conflicts=('cups')
 backup=('etc/cups/cupsd.conf' 'etc/cups/cups-files.conf' 'etc/cups/printers.conf')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/vindeckyy/presswork/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::https://github.com/vindeckyy/yindle/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('74b49824bbfa2e2b417ee1caa6094743cba6fb7ffe0be71ba0e6ee3a1662121a')
 options=('!lto')   # workspace already sets its release profile
 
@@ -31,10 +31,10 @@ package() {
     cd "$pkgname-$pkgver"
     make install DESTDIR="$pkgdir" PROFILE=release
     # systemd + sysusers/tmpfiles
-    install -Dm644 packaging/arch/presswork.sysusers \
-        "$pkgdir/usr/lib/sysusers.d/presswork.conf"
-    install -Dm644 packaging/arch/presswork.tmpfiles \
-        "$pkgdir/usr/lib/tmpfiles.d/presswork.conf"
+    install -Dm644 packaging/arch/yindle.sysusers \
+        "$pkgdir/usr/lib/sysusers.d/yindle.conf"
+    install -Dm644 packaging/arch/yindle.tmpfiles \
+        "$pkgdir/usr/lib/tmpfiles.d/yindle.conf"
     install -Dm644 packaging/pam/cups "$pkgdir/etc/pam.d/cups"
     install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/MIT"
     install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/Apache-2.0"

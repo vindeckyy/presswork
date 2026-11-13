@@ -27,7 +27,7 @@ jobs:
         run: |
           set -u
           # Leaves first; crates that depend on published crates last.
-          for c in ipp-codec presswork-sys backend-common cups-tls cups-log cups-config; do
+          for c in ipp-codec yindle-sys backend-common cups-tls cups-log cups-config; do
             for attempt in 1 2 3 4 5; do
               out=$(cargo publish -p "$c" --token "$CARGO_REGISTRY_TOKEN" 2>&1) && {
                 echo "$out" | tail -3; break;

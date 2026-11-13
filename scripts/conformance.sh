@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# conformance.sh — bootstrap a scratch presswork daemon and run the upstream
+# conformance.sh — bootstrap a scratch yindle daemon and run the upstream
 # ipptool suite against it. Used by CI and by `make conformance`.
 #
 #   --bootstrap   build + lay out a scratch root and start the daemon

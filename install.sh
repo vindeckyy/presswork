@@ -1,7 +1,7 @@
 #!/bin/sh
-# presswork one-command installer.
+# yindle one-command installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/vindeckyy/presswork/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/vindeckyy/yindle/main/install.sh | sh
 #
 # Options: --no-start  install but leave the daemon stopped
 #          --version X install a specific release (default: latest)
@@ -13,7 +13,7 @@
 # accounts, and enables socket activation (cups.socket + cups.path).
 set -eu
 
-REPO=vindeckyy/presswork
+REPO=vindeckyy/yindle
 
 START=1 VERSION="" SRC="" FORCE=0
 while [ $# -gt 0 ]; do
@@ -49,7 +49,7 @@ if [ "$(id -u)" != 0 ]; then
 fi
 
 # Refuse to silently overwrite a distro-managed cupsd.
-if [ "$FORCE" = 0 ] && [ -x /usr/sbin/cupsd ] && [ ! -f /usr/share/doc/presswork/README.md ]; then
+if [ "$FORCE" = 0 ] && [ -x /usr/sbin/cupsd ] && [ ! -f /usr/share/doc/yindle/README.md ]; then
     cat >&2 <<'EOF'
 install.sh: an existing /usr/sbin/cupsd was found.
   On Debian/Ubuntu remove it first (apt remove cups-daemon; keep
@@ -78,7 +78,7 @@ if [ -z "$SRC" ]; then
             TMP=$(mktemp -d)
         fi
 
-        PKG=presswork-$VERSION-$TARGET
+        PKG=yindle-$VERSION-$TARGET
         BASE=https://github.com/$REPO/releases/download/v$VERSION
         echo "install.sh: fetching $PKG"
         fetch "$BASE/$PKG.tar.gz" "$TMP/$PKG.tar.gz"
@@ -89,12 +89,12 @@ if [ -z "$SRC" ]; then
             echo "install.sh: warning: could not verify checksum" >&2
         fi
         tar -C "$TMP" -xzf "$TMP/$PKG.tar.gz"
-        SRC=$TMP/presswork-$VERSION
+        SRC=$TMP/yindle-$VERSION
     fi
 fi
 trap '[ -n "$TMP" ] && rm -rf "$TMP"' EXIT
 
-[ -x "$SRC/usr/sbin/cupsd" ] || die "$SRC does not look like a presswork release tree"
+[ -x "$SRC/usr/sbin/cupsd" ] || die "$SRC does not look like a yindle release tree"
 
 # ---- accounts ---------------------------------------------------------------
 getent group lp >/dev/null 2>&1 || $SUDO groupadd -r lp
@@ -119,7 +119,7 @@ if command -v systemctl >/dev/null 2>&1; then
     fi
 fi
 
-echo "presswork ${VERSION:-release} installed."
+echo "yindle ${VERSION:-release} installed."
 echo "  status:    systemctl status cups.socket cups.service"
 echo "  add queue: lpadmin -p <name> -E -v <uri> -m everywhere"
 echo "  verify:    lpstat -t"

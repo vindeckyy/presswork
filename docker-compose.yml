@@ -1,8 +1,8 @@
-# `docker compose up` evaluates presswork without touching a host
+# `docker compose up` evaluates yindle without touching a host
 # CUPS install: cupsd on 631 with persistent config, spool, and logs.
 services:
   cupsd:
-    image: ghcr.io/vindeckyy/presswork:latest
+    image: ghcr.io/vindeckyy/yindle:latest
     ports:
       - "631:631"
     volumes:

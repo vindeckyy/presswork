@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: presswork
+title: yindle
 message: If you use this software, please cite it as below.
 type: software
 authors:
@@ -16,6 +16,6 @@ keywords:
   - print spooler
   - rust
 license: Apache-2.0 OR MIT
-repository-code: https://github.com/vindeckyy/presswork
+repository-code: https://github.com/vindeckyy/yindle
 version: 0.1.0
 date-released: "2026-11-12"

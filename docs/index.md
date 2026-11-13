@@ -1,12 +1,12 @@
-# presswork - a CUPS replacement in Rust
+# yindle - a CUPS replacement in Rust
 
-presswork is a memory-safe, drop-in replacement for the CUPS print
+yindle is a memory-safe, drop-in replacement for the CUPS print
 server (`cupsd`): a print spooler and IPP scheduler written in Rust that
 keeps the Common UNIX Printing System's wire protocol, configuration
 files, spool layout, and filter/backend contracts, so existing clients,
 print dialogs, and admin tools work unmodified.
 
-## Why presswork
+## Why yindle
 
 - **Memory safety by construction** - every byte from the network is
   parsed by a strictly-typed, fuzzed codec; `unsafe` is forbidden
@@ -24,11 +24,11 @@ print dialogs, and admin tools work unmodified.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/vindeckyy/presswork/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vindeckyy/yindle/main/install.sh | sh
 ```
 
 Or grab the `.deb` / tarball from the
-[releases page](https://github.com/vindeckyy/presswork/releases), or
+[releases page](https://github.com/vindeckyy/yindle/releases), or
 build from source with `cargo build --release && sudo make install`.
 
 ## Documentation
@@ -42,4 +42,4 @@ build from source with `cargo build --release && sudo make install`.
 - [Security model](security.md)
 
 Source, issues, and releases:
-[github.com/vindeckyy/presswork](https://github.com/vindeckyy/presswork)
+[github.com/vindeckyy/yindle](https://github.com/vindeckyy/yindle)

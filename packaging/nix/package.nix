@@ -1,6 +1,6 @@
-# nixpkgs-ready derivation for presswork.
+# nixpkgs-ready derivation for yindle.
 #
-# Before submitting upstream (pkgs/by-name/pr/presswork/package.nix):
+# Before submitting upstream (pkgs/by-name/pr/yindle/package.nix):
 #   1. replace both lib.fakeHash placeholders - the first build failure
 #      prints the real hash for each.
 #   2. keep `meta.homepage` and `meta.changelog` pointing at the repo.
@@ -12,14 +12,14 @@
 }:
 
 rustPlatform.buildRustPackage rec {
-  pname = "presswork";
+  pname = "yindle";
   version = "0.1.0";
 
   src = fetchFromGitHub {
     owner = "vindeckyy";
-    repo = "presswork";
+    repo = "yindle";
     rev = "v${version}";
-    hash = lib.fakeHash; # prefetch: nix-prefetch-github vindeckyy presswork --rev v0.1.0
+    hash = lib.fakeHash; # prefetch: nix-prefetch-github vindeckyy yindle --rev v0.1.0
   };
 
   cargoHash = lib.fakeHash; # printed by the first build attempt
@@ -39,13 +39,13 @@ rustPlatform.buildRustPackage rec {
   meta = with lib; {
     description = "Memory-safe CUPS 2.x-compatible print spooler and IPP scheduler in Rust";
     longDescription = ''
-      presswork is a drop-in replacement for the CUPS scheduler (cupsd):
+      yindle is a drop-in replacement for the CUPS scheduler (cupsd):
       the same IPP wire protocol, config files, spool layout, and
       filter/backend contracts, implemented in Rust with unsafe code
       confined to a single audited FFI crate.
     '';
-    homepage = "https://github.com/vindeckyy/presswork";
-    changelog = "https://github.com/vindeckyy/presswork/blob/main/CHANGELOG.md";
+    homepage = "https://github.com/vindeckyy/yindle";
+    changelog = "https://github.com/vindeckyy/yindle/blob/main/CHANGELOG.md";
     license = with licenses; [ mit asl20 ];
     platforms = platforms.linux;
     mainProgram = "cupsd";

@@ -1,4 +1,4 @@
-# presswork runtime dirs — created at boot (Type=d).
+# yindle runtime dirs — created at boot (Type=d).
 d /run/cups 0755 lp lp -
 d /run/cups/certs 0755 lp lp -
 d /var/spool/cups 0710 lp lp -

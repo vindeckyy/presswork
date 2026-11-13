@@ -1,9 +1,9 @@
-# Maintainer: presswork contributors <presswork@example.invalid>
-pkgname=presswork
+# Maintainer: yindle contributors <yindle@example.invalid>
+pkgname=yindle
 pkgver=0.1.0
 pkgrel=0
 pkgdesc="Memory-safe CUPS-compatible print spooler and IPP scheduler"
-url="https://example.invalid/presswork"
+url="https://example.invalid/yindle"
 arch="all"
 license="MIT OR Apache-2.0"
 depends="avahi"
@@ -19,8 +19,8 @@ build() {
 
 package() {
     make install DESTDIR="$pkgdir" PROFILE=release USER=lp GROUP=lp
-    install -Dm644 packaging/alpine/presswork.initd \
-        "$pkgdir/etc/init.d/presswork"
+    install -Dm644 packaging/alpine/yindle.initd \
+        "$pkgdir/etc/init.d/yindle"
     install -Dm644 packaging/pam/cups "$pkgdir/etc/pam.d/cups"
     install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/MIT"
     install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/Apache-2.0"

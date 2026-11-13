@@ -2,7 +2,7 @@
 //! `scheduler/dirsvc.c`'s `dnssdRegisterPrinter` + `cupsdStartBrowsing`.
 //!
 //! Uses the pure-Rust `mdns-sd` responder (no Avahi/D-Bus runtime dep) so
-//! presswork can advertise and discover printers self-contained on Linux.
+//! yindle can advertise and discover printers self-contained on Linux.
 //!
 //! ## Advertisement (`cupsdRegisterPrinter`)
 //! For each shared printer we register, per upstream:

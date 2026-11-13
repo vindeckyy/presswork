@@ -1,8 +1,23 @@
 # Changelog
 
-All notable changes to presswork are documented here. The format follows
+All notable changes to yindle are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Changed
+
+- **Renamed: presswork is now yindle.** The old name collided with
+  PressWork (https://presswork.it/), a commercial office suite, see
+  issue #8. Thanks to Till Kamppeter for flagging it. Repository, docs,
+  package and crate names move to `yindle`. The installed binaries keep
+  their CUPS names (`cupsd`, `cupsfilter`, and the rest) and all config,
+  spool and service paths are unchanged, so this is not a compatibility
+  break. One wire-visible string changes: the IEEE 1284 manufacturer
+  token is now `MFG:yindle`. The Alpine OpenRC service is also renamed
+  from `presswork` to `yindle`; the systemd units keep their `cups.*`
+  names.
 
 ## [0.1.0] - 2026-11-12
 
@@ -45,8 +60,8 @@ print spooler and IPP scheduler, built for drop-in compatibility.
   targets exercised (~1.5M execs); three `mime-db` crashes found and
   fixed before release.
 - Differential runner (`scripts/differential.sh`) executes the same
-  matrix against stock cupsd and presswork; every stock-pass test also
-  passes on presswork.
+  matrix against stock cupsd and yindle; every stock-pass test also
+  passes on yindle.
 - Memory: RSS flat at ~4.3 MB across 100 Print-Job requests in soak
   testing.
 

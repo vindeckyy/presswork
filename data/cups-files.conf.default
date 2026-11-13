@@ -1,4 +1,4 @@
-# presswork cups-files.conf — filesystem/user settings (upstream: conf/cups-files.conf.in).
+# yindle cups-files.conf — filesystem/user settings (upstream: conf/cups-files.conf.in).
 # Paths match the FHS layout `make install` produces.
 
 # Account the scheduler runs as and the group that owns writable state.

@@ -1,3 +1,7 @@
+> Note: this project was renamed from presswork to yindle in November
+> 2026. The rest of this document is the original 0.1.0 announcement,
+> kept as published. See CHANGELOG for the rename note.
+
 # presswork 0.1.0: a memory-safe CUPS replacement in Rust
 
 Today we are releasing **presswork 0.1.0**, a drop-in replacement for

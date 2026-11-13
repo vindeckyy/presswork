@@ -55,7 +55,7 @@ name = "authn"
 version = "0.1.0"
 dependencies = [
  "base64",
- "presswork-sys",
+ "yindle-sys",
 ]
 
 [[package]]
@@ -213,7 +213,7 @@ name = "cups-backend-serial"
 version = "0.1.0"
 dependencies = [
  "backend-common",
- "presswork-sys",
+ "yindle-sys",
 ]
 
 [[package]]
@@ -242,7 +242,7 @@ name = "cups-config"
 version = "0.1.0"
 dependencies = [
  "ipp-codec",
- "presswork-sys",
+ "yindle-sys",
 ]
 
 [[package]]
@@ -302,12 +302,12 @@ dependencies = [
  "mime-db",
  "ops",
  "pipeline",
- "presswork-sys",
  "printer",
  "tokio",
  "tokio-rustls",
  "tracing",
  "tracing-subscriber",
+ "yindle-sys",
 ]
 
 [[package]]
@@ -681,13 +681,6 @@ name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
-
-[[package]]
-name = "presswork-sys"
-version = "0.1.0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "printer"
@@ -1283,6 +1276,13 @@ checksum = "b5f6765e852b9b4dc8e2a76843e4d64d1cea8e79bcde0b6901aea8e7c7f08282"
 dependencies = [
  "bit-vec",
  "time",
+]
+
+[[package]]
+name = "yindle-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

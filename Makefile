@@ -1,4 +1,4 @@
-# presswork — install target honoring the FHS perm map.
+# yindle — install target honoring the FHS perm map.
 # `make && make install DESTDIR=…` produces the layout distro packages ship.
 
 PREFIX        ?= /usr
@@ -7,7 +7,7 @@ BINDIR        ?= $(PREFIX)/bin
 SBINDIR       ?= $(PREFIX)/sbin
 SERVERBIN     ?= $(PREFIX)/lib/cups
 DATADIR       ?= $(PREFIX)/share/cups
-DOCDIR        ?= $(PREFIX)/share/doc/presswork
+DOCDIR        ?= $(PREFIX)/share/doc/yindle
 MANDIR        ?= $(PREFIX)/share/man
 UNITDIR       ?= $(PREFIX)/lib/systemd/system
 SYSCONFDIR    ?= /etc/cups

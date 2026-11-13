@@ -43,7 +43,7 @@ pub struct ServerOptions {
 impl Default for ServerOptions {
     fn default() -> Self {
         Self {
-            server_tokens: "CUPS/2.5 (presswork)".into(),
+            server_tokens: "CUPS/2.5 (yindle)".into(),
             max_body: 0,
             idle_timeout: std::time::Duration::from_secs(300),
             max_bad_requests: 4,

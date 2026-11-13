@@ -1,6 +1,6 @@
 # IPP conformance matrix
 
-Status of `presswork` against the stock OpenPrinting `ipptool` suite
+Status of `yindle` against the stock OpenPrinting `ipptool` suite
 (`/usr/share/cups/ipptool`, mirrored from `examples/` in the CUPS 2.5
 source tree). Each `.test` file is run with
 `ipptool -t -f <document> ipp://<host>/printers/<queue>`; the counts are
@@ -108,7 +108,7 @@ backend scheme listings.
 ## Differential runner vs stock cupsd - `scripts/differential.sh`
 
 Runs the same matrix first against `/usr/sbin/cupsd` (stock 2.4.x) in a
-scratch root, then against presswork, and diffs the per-test verdicts.
+scratch root, then against yindle, and diffs the per-test verdicts.
 Both sides use upstream's real test harness shape discovered in
 `test/run-stp-tests.sh`: the `4.x` tier runs over **TCP**
 `ipp://localhost:port/printers` with an all-allow `<Policy default>
@@ -121,14 +121,14 @@ anonymous-but-allowed ops. Now `cups-config::Satisfy::Any` is the
 default (`crates/cups-config/src/types.rs`).
 
 Current differential baseline (same fixture, both daemons): every test
-stock cupsd **passes**, presswork also passes - `get-printers*`,
+stock cupsd **passes**, yindle also passes - `get-printers*`,
 `get-jobs`, `get-completed-jobs`, `create-printer-subscription`,
 `print-job`, `create-job`, `validate-job`, `ipp-1.1`, `4.1`. Stock's
 remaining FAILs are fixture/environment gaps on its side (raw-queue
 `media-col-*` synthesis needs a real driver queue; `testnotify://`
 subscriptions need a `bin/notifier` binary; `text/plain` is rejected on
 deprecated raw queues; `get-devices` hits the same stock-ipptool
-URI-strictness documented above) - not parity gaps in presswork.
+URI-strictness documented above) - not parity gaps in yindle.
 
 ## RFC / PWG suites - all green
 

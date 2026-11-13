@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # differential.sh — run the same upstream ipptool matrix against stock
-# /usr/sbin/cupsd and presswork cupsd, then diff the per-test verdicts.
+# /usr/sbin/cupsd and yindle cupsd, then diff the per-test verdicts.
 #
 # The gate: any test that PASSES on stock cupsd but FAILS (or vice-versa)
-# on presswork is a semantic-parity gap to fix, not an ipptool artifact.
+# on yindle is a semantic-parity gap to fix, not an ipptool artifact.
 #
 #   --stock    run the matrix against a scratch stock cupsd (port 8641)
-#   --ours     run the matrix against presswork via conformance.sh (8631)
+#   --ours     run the matrix against yindle via conformance.sh (8631)
 #   (no args)  run both and print the verdict diff
 #
 # Env: DIFFROOT (stock scratch root, /tmp/pw-diff), DIFFPORT (8641),
@@ -155,8 +155,8 @@ case "${1:-all}" in
     --ours)  ours ;;
     *)
         echo "== stock cupsd =="; stock | tee /tmp/diff-stock.txt
-        echo "== presswork ==";  ours  | tee /tmp/diff-ours.txt
-        echo "== verdict diff (< stock, > presswork) =="
+        echo "== yindle ==";  ours  | tee /tmp/diff-ours.txt
+        echo "== verdict diff (< stock, > yindle) =="
         diff /tmp/diff-stock.txt /tmp/diff-ours.txt || true
         ;;
 esac

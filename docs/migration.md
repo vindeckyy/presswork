@@ -1,35 +1,35 @@
 # Migrating from C cupsd - the zero-risk path
 
-presswork is designed to run **alongside** the stock `cupsd` so a distro
+yindle is designed to run **alongside** the stock `cupsd` so a distro
 or admin can prove equivalence on live traffic before committing. Nothing
 below touches the running spooler until the final swap.
 
 ## 1. Install on an alternate port
 
-Build or install the package, then run presswork on a non-conflicting
+Build or install the package, then run yindle on a non-conflicting
 listener with its own config root:
 
 ```sh
 # Copy the stock config into a scratch root (no changes to /etc/cups).
-mkdir -p /tmp/presswork/etc
-cp /etc/cups/{cupsd.conf,cups-files.conf,printers.conf,mime.types,mime.convs} /tmp/presswork/etc/
+mkdir -p /tmp/yindle/etc
+cp /etc/cups/{cupsd.conf,cups-files.conf,printers.conf,mime.types,mime.convs} /tmp/yindle/etc/
 
 # Add a non-conflicting listener.
-echo 'Listen 127.0.0.1:8631' >> /tmp/presswork/etc/cupsd.conf
-echo 'Listen /tmp/presswork/cups.sock' >> /tmp/presswork/etc/cupsd.conf
+echo 'Listen 127.0.0.1:8631' >> /tmp/yindle/etc/cupsd.conf
+echo 'Listen /tmp/yindle/cups.sock' >> /tmp/yindle/etc/cupsd.conf
 
-/usr/sbin/cupsd -c /tmp/presswork/etc/cupsd.conf -f &
+/usr/sbin/cupsd -c /tmp/yindle/etc/cupsd.conf -f &
 ```
 
 ## 2. A/B with `CUPS_SERVER` - no disruption
 
 Every standard CUPS client honors `CUPS_SERVER`. Point it at the
-presswork listener and run the real workload:
+yindle listener and run the real workload:
 
 ```sh
 export CUPS_SERVER=127.0.0.1:8631
 ipptool ipp://localhost/printers/<queue> get-printer-attributes.test
-lpq # query the presswork daemon
+lpq # query the yindle daemon
 lp /path/to/file # submit a real job
 ```
 
@@ -44,17 +44,17 @@ expected-equivalence reference.
  `job-state` transitions (`pending→processing→completed`).
 * Exercise the ops your site uses (`lp`, `lpstat`, `cancel`, `lpadmin`,
  the CUPS web dialogs via the CGI layer).
-* Run the upstream `ipptool` examples against the presswork endpoint.
+* Run the upstream `ipptool` examples against the yindle endpoint.
 
 ## 4. Swap when satisfied
 
 ```sh
 systemctl stop cups cups.socket cups.path
 systemctl disable cups cups.socket cups.path
-systemctl enable --now presswork.service presswork.socket presswork.path
+systemctl enable --now yindle.service yindle.socket yindle.path
 ```
 
-presswork reads `/etc/cups` **in place** - `printers.conf`, `cupsd.conf`,
+yindle reads `/etc/cups` **in place** - `printers.conf`, `cupsd.conf`,
 `cups-files.conf`, `ppd/` all carry over unchanged, so existing queues,
 policies, and PPD bindings survive the cutover. To roll back, re-enable
 the stock units; the config files were never rewritten.

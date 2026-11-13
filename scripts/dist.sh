@@ -1,7 +1,7 @@
 #!/bin/sh
 # dist.sh — build release artifacts into ./dist:
-#   presswork-$VER-$TARGET.tar.gz   FHS tree + install.sh
-#   presswork_${VER}-1_amd64.deb    Debian package (dpkg-deb)
+#   yindle-$VER-$TARGET.tar.gz   FHS tree + install.sh
+#   yindle_${VER}-1_amd64.deb    Debian package (dpkg-deb)
 #   SHA256SUMS
 # Run from the repo root. Used by release.yml; safe to run locally.
 set -eu
@@ -11,7 +11,7 @@ command -v cargo >/dev/null 2>&1 || PATH="$HOME/.cargo/bin:$PATH"
 VER=${1:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}
 TARGET=$(rustc -vV | sed -n 's/^host: //p')
 STAGE=dist/stage
-PKG=presswork-$VER-$TARGET
+PKG=yindle-$VER-$TARGET
 
 rm -rf dist
 mkdir -p "$STAGE"
@@ -27,21 +27,21 @@ install -m 0755 install.sh "$STAGE/install.sh"
 install -m 0644 README.md LICENSE* "$STAGE/" 2>/dev/null || true
 
 # ---- tarball --------------------------------------------------------------
-mv "$STAGE" "dist/presswork-$VER"
+mv "$STAGE" "dist/yindle-$VER"
 tar -C dist --owner=0 --group=0 --numeric-owner \
-    -czf "dist/$PKG.tar.gz" "presswork-$VER"
-mv "dist/presswork-$VER" "$STAGE"
+    -czf "dist/$PKG.tar.gz" "yindle-$VER"
+mv "dist/yindle-$VER" "$STAGE"
 
 # ---- deb ------------------------------------------------------------------
 DEB="$STAGE/DEBIAN"
 mkdir -p "$DEB"
 cat > "$DEB/control" <<EOF
-Package: presswork
+Package: yindle
 Version: $VER-1
 Section: net
 Priority: optional
 Architecture: amd64
-Maintainer: presswork contributors <presswork@localhost>
+Maintainer: yindle contributors <yindle@localhost>
 Depends: adduser
 Provides: cups
 Conflicts: cups, cups-daemon
@@ -52,7 +52,7 @@ Description: memory-safe CUPS-compatible print spooler and IPP scheduler
  sockets and reading /etc/cups in place.
 EOF
 
-sed 's/#DEBHELPER#//' packaging/debian/presswork.postinst > "$DEB/postinst"
+sed 's/#DEBHELPER#//' packaging/debian/yindle.postinst > "$DEB/postinst"
 cat >> "$DEB/postinst" <<'EOF'
 
 case "$1" in
@@ -77,9 +77,9 @@ exit 0
 EOF
 chmod 0755 "$DEB/prerm"
 
-dpkg-deb --root-owner-group --build "$STAGE" "dist/presswork_${VER}-1_amd64.deb" >/dev/null
+dpkg-deb --root-owner-group --build "$STAGE" "dist/yindle_${VER}-1_amd64.deb" >/dev/null
 
 # ---- checksums -------------------------------------------------------------
-(cd dist && sha256sum "$PKG.tar.gz" "presswork_${VER}-1_amd64.deb" > SHA256SUMS)
+(cd dist && sha256sum "$PKG.tar.gz" "yindle_${VER}-1_amd64.deb" > SHA256SUMS)
 
 ls -l dist/

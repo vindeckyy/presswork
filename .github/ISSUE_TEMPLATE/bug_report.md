@@ -6,7 +6,7 @@ labels: bug
 assignees: ''
 ---
 
-**presswork version / commit**
+**yindle version / commit**
 <!-- output of `cupsd -V` or the release tag / commit SHA -->
 
 **Environment**

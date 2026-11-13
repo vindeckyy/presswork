@@ -1,6 +1,6 @@
 # Security posture
 
-presswork is a long-lived, network-facing daemon that historically runs
+yindle is a long-lived, network-facing daemon that historically runs
 with elevated privileges and parses attacker-controlled input - the exact
 profile that made the C printing stack's CVE history so costly. This
 document records the threat model and the structural mitigations.
@@ -16,7 +16,7 @@ config file.
 
 Every stage of that *class* is structurally prevented:
 
-| Stage in the C chain | presswork equivalent | Why it can't recur |
+| Stage in the C chain | yindle equivalent | Why it can't recur |
 |---|---|---|
 | Untrusted IPP attrs parsed into a PPD | `ipp-codec` - `#![forbid(unsafe_code)]`, fuzzed round-trip vs libcups | Strictly-typed decode; no format-string or buffer classes in the parser |
 | PPD text spliced into a command line | argv built as `Vec<OsString>`; backends/filters are `execv`-style spawns | No `system()`/`popen` anywhere; a printer URI can never become a shell token |

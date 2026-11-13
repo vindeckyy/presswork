@@ -72,7 +72,7 @@ fn parse_args() -> Result<Option<Args>, i32> {
                 return Ok(None);
             }
             "-v" | "--version" => {
-                println!("cupsd {VERSION} (presswork)");
+                println!("cupsd {VERSION} (yindle)");
                 return Ok(None);
             }
             _ => {

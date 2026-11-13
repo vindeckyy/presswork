@@ -16,4 +16,4 @@ workspace = true
 
 [dependencies]
 ipp-codec = { path = "../ipp-codec", version = "0.1.0" }
-sys = { path = "../sys", package = "presswork-sys", version = "0.1.0" }
+sys = { path = "../sys", package = "yindle-sys", version = "0.1.0" }

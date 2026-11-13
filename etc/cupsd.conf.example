@@ -1,4 +1,4 @@
-# Sample cupsd.conf for presswork — mirrors stock CUPS 2.x defaults.
+# Sample cupsd.conf for yindle — mirrors stock CUPS 2.x defaults.
 # Install to /etc/cups/cupsd.conf; file-level paths live in cups-files.conf.
 
 LogLevel warn

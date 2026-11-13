@@ -8,7 +8,7 @@ ExecStart=/usr/sbin/cupsd -l
 Type=simple
 Restart=always
 
-# ---- presswork sandbox hardening -------------------------------------------
+# ---- yindle sandbox hardening -------------------------------------------
 # cupsd is a long-lived root daemon that spawns filter/backend children and
 # owns the network-facing IPP surface — the highest-value process to sandbox
 # on most systems. These directives are chosen to be *compatible with a print
