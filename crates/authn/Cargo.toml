@@ -9,5 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 sys = { path = "../sys", package = "presswork-sys" }
