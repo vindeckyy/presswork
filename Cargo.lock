@@ -55,7 +55,7 @@ name = "authn"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "sys",
+ "presswork-sys",
 ]
 
 [[package]]
@@ -219,7 +219,7 @@ name = "cups-backend-serial"
 version = "0.1.0"
 dependencies = [
  "backend-common",
- "sys",
+ "presswork-sys",
 ]
 
 [[package]]
@@ -248,7 +248,7 @@ name = "cups-config"
 version = "0.1.0"
 dependencies = [
  "ipp-codec",
- "sys",
+ "presswork-sys",
 ]
 
 [[package]]
@@ -308,8 +308,8 @@ dependencies = [
  "mime-db",
  "ops",
  "pipeline",
+ "presswork-sys",
  "printer",
- "sys",
  "tokio",
  "tokio-rustls",
  "tracing",
@@ -689,6 +689,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
+name = "presswork-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "printer"
 version = "0.1.0"
 dependencies = [
@@ -983,13 +990,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "sys"
-version = "0.1.0"
-dependencies = [
- "libc",
 ]
 
 [[package]]

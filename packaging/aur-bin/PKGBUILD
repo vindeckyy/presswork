@@ -1,0 +1,35 @@
+# Maintainer: vindeckyy <https://github.com/vindeckyy>
+pkgname=presswork-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Memory-safe CUPS 2.x-compatible print spooler and IPP scheduler in Rust (prebuilt release binaries)"
+arch=('x86_64')
+url="https://github.com/vindeckyy/presswork"
+license=('MIT' 'Apache-2.0')
+depends=('glibc' 'gcc-libs')
+provides=('cups' 'presswork')
+conflicts=('cups' 'presswork')
+backup=('etc/cups/cupsd.conf' 'etc/cups/cups-files.conf' 'etc/cups/printers.conf')
+install=
+source=("https://github.com/vindeckyy/presswork/releases/download/v${pkgver}/presswork-${pkgver}-x86_64-unknown-linux-gnu.tar.gz"
+        "presswork.sysusers"
+        "presswork.tmpfiles")
+sha256sums=('daa9fc8ecb9815b5909abad4be36b7faa177d35cd03d373aa8c54bc26bdad4fb'
+            'SKIP'
+            'SKIP')
+
+package() {
+    cd "presswork-${pkgver}"
+
+    # The release tarball is an FHS tree; package the persistent parts.
+    # Runtime dirs are created by the shipped tmpfiles config instead.
+    cp -a usr etc "$pkgdir/"
+
+    install -Dm644 "$srcdir/presswork.sysusers" \
+        "$pkgdir/usr/lib/sysusers.d/presswork.conf"
+    install -Dm644 "$srcdir/presswork.tmpfiles" \
+        "$pkgdir/usr/lib/tmpfiles.d/presswork.conf"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/MIT"
+    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/Apache-2.0"
+}

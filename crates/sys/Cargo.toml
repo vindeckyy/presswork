@@ -1,10 +1,15 @@
 [package]
-name = "sys"
-description = "The only unsafe-permitted crate: privdrop, fd plumbing, rlimits, exec, syslog"
+name = "presswork-sys"
+description = "Unsafe-confined system FFI for the presswork CUPS-compatible scheduler: privilege drop, fd plumbing, rlimits, exec, syslog"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
 
 [dependencies]
 libc = "0.2"

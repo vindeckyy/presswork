@@ -1,18 +1,18 @@
-# Maintainer: presswork contributors <https://example.invalid/presswork>
+# Maintainer: vindeckyy <https://github.com/vindeckyy>
 pkgname=presswork
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="A memory-safe, CUPS 2.x-compatible print spooler and IPP scheduler in Rust (driverless-first)"
 arch=('x86_64' 'aarch64')
-url="https://example.invalid/presswork"
+url="https://github.com/vindeckyy/presswork"
 license=('MIT' 'Apache-2.0')
 depends=('glibc' 'gcc-libs' 'avahi')
 makedepends=('cargo' 'rust')
 provides=('cups')
 conflicts=('cups')
 backup=('etc/cups/cupsd.conf' 'etc/cups/cups-files.conf' 'etc/cups/printers.conf')
-source=("$pkgname-$pkgver.tar.gz")
-sha256sums=('SKIP')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/vindeckyy/presswork/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('74b49824bbfa2e2b417ee1caa6094743cba6fb7ffe0be71ba0e6ee3a1662121a')
 options=('!lto')   # workspace already sets its release profile
 
 prepare() {

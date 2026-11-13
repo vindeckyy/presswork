@@ -10,4 +10,4 @@ workspace = true
 
 [dependencies]
 base64 = "0.22"
-sys = { path = "../sys" }
+sys = { path = "../sys", package = "presswork-sys" }

@@ -26,5 +26,5 @@ cups-tls = { path = "../../crates/cups-tls" }
 tokio-rustls = "0.26.6"
 events = { path = "../../crates/events" }
 dnssd = { path = "../../crates/dnssd" }
-sys = { path = "../../crates/sys" }
+sys = { path = "../../crates/sys", package = "presswork-sys" }
 libc = "0.2"

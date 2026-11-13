@@ -1,13 +1,19 @@
 [package]
 name = "cups-config"
+description = "CUPS configuration file parsers (cupsd.conf, cups-files.conf) with upstream 2.x semantics"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
-ipp-codec = { path = "../ipp-codec" }
-sys = { path = "../sys" }
+ipp-codec = { path = "../ipp-codec", version = "0.1.0" }
+sys = { path = "../sys", package = "presswork-sys", version = "0.1.0" }

@@ -1,0 +1,9 @@
+# presswork runtime dirs — created at boot (Type=d).
+d /run/cups 0755 lp lp -
+d /run/cups/certs 0755 lp lp -
+d /var/spool/cups 0710 lp lp -
+d /var/spool/cups/tmp 0710 lp lp -
+d /var/log/cups 0755 lp lp -
+d /var/cache/cups 0770 lp lp -
+d /var/cache/cups/rss 0770 lp lp -
+z /etc/cups/ssl 0700 lp lp -

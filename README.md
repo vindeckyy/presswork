@@ -120,6 +120,11 @@ Prefer a package or the manual path? Each
 `.deb` (`sudo dpkg -i presswork_0.1.0-1_amd64.deb`, declared
 `Conflicts: cups,cups-daemon`) and the raw FHS tarball.
 
+```
+# Homebrew on Linux (user-space eval on port 8631):
+brew install vindeckyy/tap/presswork && brew services start presswork
+```
+
 Verify: `lpstat -t`, then `lpadmin -p test -E -v ipp://<printer> -m
 everywhere` and `lp -d test /etc/hostname`. Because the wire, config
 files, and spool paths match CUPS 2.x, existing clients (`lp`, `lpq`,

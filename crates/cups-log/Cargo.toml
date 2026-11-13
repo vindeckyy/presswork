@@ -1,13 +1,19 @@
 [package]
 name = "cups-log"
+description = "CUPS scheduler log files (error_log, access_log, page_log) with upstream 2.x semantics"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
-ipp-codec = { path = "../ipp-codec" }
+ipp-codec = { path = "../ipp-codec", version = "0.1.0" }
 time = { version = "0.3", features = ["local-offset", "formatting"] }
