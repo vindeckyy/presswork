@@ -12,14 +12,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 - **Renamed: presswork is now yindle.** The old name collided with
   PressWork (https://presswork.it/), a commercial office suite, see
-  issue #8. Thanks to Till Kamppeter for flagging it. Repository, docs,
-  package and crate names move to `yindle`. The installed binaries keep
-  their CUPS names (`cupsd`, `cupsfilter`, and the rest) and all config,
-  spool and service paths are unchanged, so this is not a compatibility
-  break. One wire-visible string changes: the IEEE 1284 manufacturer
-  token is now `MFG:yindle`. The Alpine OpenRC service is also renamed
-  from `presswork` to `yindle`; the systemd units keep their `cups.*`
-  names.
+  issue #8. Thanks to Till Kamppeter for flagging it.
+- Repository, docs, package and crate names move to `yindle`.
+- The installed binaries keep their CUPS names (`cupsd`, `cupsfilter`,
+  and the rest) and all config, spool and service paths are unchanged,
+  so this is not a compatibility break.
+- One wire-visible string changes: the IEEE 1284 manufacturer token is
+  now `MFG:yindle`.
+- The Alpine OpenRC service is also renamed from `presswork` to
+  `yindle`; the systemd units keep their `cups.*` names.
 
 ## [0.1.0] - 2026-11-12
 
